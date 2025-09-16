@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>キャリブレーションサンプル</title>
+<style>
+  body { font-family: sans-serif; text-align: center; margin-top: 50px; }
+  #taskArea { width: 600px; height: 400px; border: 2px solid #333; margin: 0 auto; position: relative; }
+  #sliderContainer { margin-top: 20px; }
+</style>
+</head>
+<body>
+
+<h2>キャリブレーションタスク</h2>
+<p>マウスを動かしながらスライダーで感情を自己申告してください</p>
+
+<div id="taskArea"></div>
+
+<div id="sliderContainer">
+  <label for="emotionSlider">感情:</label>
+  <input type="range" id="emotionSlider" min="1" max="7" value="4">
+  <span id="sliderValue">4</span>
+</div>
+
+<button id="downloadBtn">データをダウンロード</button>
+
+<script>
+  const taskArea = document.getElementById("taskArea");
+  const slider = document.getElementById("emotionSlider");
+  const sliderValue = document.getElementById("sliderValue");
+  const downloadBtn = document.getElementById("downloadBtn");
+
+  let dataLog = [];
+
+  // スライダー値表示更新
+  slider.addEventListener("input", () => {
+    sliderValue.textContent = slider.value;
+    const timestamp = Date.now();
+    dataLog.push({
+      timestamp,
+      mouse: null,       // 後でマウスデータと組み合わせ
+      emotion_label: parseInt(slider.value)
+    });
+  });
+
+  // マウス移動イベント
+  taskArea.addEventListener("mousemove", (e) => {
+    const timestamp = Date.now();
+    const rect = taskArea.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+
+    // マウス特徴量（簡易例）
+    dataLog.push({
+      timestamp,
+      mouse: { x, y },
+      emotion_label: parseInt(slider.value)  // スライダー現在値を紐付け
+    });
+  });
+
+  // ダウンロードボタン
+  downloadBtn.addEventListener("click", () => {
+    const blob = new Blob([JSON.stringify(dataLog, null, 2)], {type: "application/json"});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "calibration_data.json";
+    a.click();
+    URL.revokeObjectURL(url);
+    alert("データをダウンロードしました");
+  });
+</script>
+
+</body>
+</html>
