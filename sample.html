@@ -1,75 +1,126 @@
 <!DOCTYPE html>
 <html lang="ja">
 <head>
-<meta charset="UTF-8">
-<title>キャリブレーションサンプル</title>
-<style>
-  body { font-family: sans-serif; text-align: center; margin-top: 50px; }
-  #taskArea { width: 600px; height: 400px; border: 2px solid #333; margin: 0 auto; position: relative; }
-  #sliderContainer { margin-top: 20px; }
-</style>
+  <meta charset="UTF-8">
+  <title>EmoNoh インタラクション感情推定デモ</title>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.12.0/dist/tf.min.js"></script>
 </head>
 <body>
+  <h1>EmoNoh — インタラクションデータで感情推定</h1>
+  <p>操作してデータをためてください（マウスを動かす・タイピングなど）</p>
 
-<h2>キャリブレーションタスク</h2>
-<p>マウスを動かしながらスライダーで感情を自己申告してください</p>
+  <div>
+    ラベル：
+    <select id="label">
+      <option value="0">集中</option>
+      <option value="1">困惑</option>
+      <option value="2">退屈</option>
+    </select>
+    <button id="collect">データ追加</button>
+    <button id="train">モデル学習</button>
+    <button id="predict">感情推定</button>
+  </div>
 
-<div id="taskArea"></div>
+  <p id="status">状態: まだ学習していません</p>
 
-<div id="sliderContainer">
-  <label for="emotionSlider">感情:</label>
-  <input type="range" id="emotionSlider" min="1" max="7" value="4">
-  <span id="sliderValue">4</span>
-</div>
+  <script>
+    const classNames = ["集中", "困惑", "退屈"];
+    let model;
+    const examples = [];
+    const labels = [];
 
-<button id="downloadBtn">データをダウンロード</button>
+    // インタラクションデータ用変数
+    let lastMouseX = 0, lastMouseY = 0, lastMoveTime = Date.now();
+    let mouseSpeed = 0;
+    let clickCount = 0;
+    let keyIntervals = [];
+    let lastKeyTime = null;
 
-<script>
-  const taskArea = document.getElementById("taskArea");
-  const slider = document.getElementById("emotionSlider");
-  const sliderValue = document.getElementById("sliderValue");
-  const downloadBtn = document.getElementById("downloadBtn");
-
-  let dataLog = [];
-
-  // スライダー値表示更新
-  slider.addEventListener("input", () => {
-    sliderValue.textContent = slider.value;
-    const timestamp = Date.now();
-    dataLog.push({
-      timestamp,
-      mouse: null,       // 後でマウスデータと組み合わせ
-      emotion_label: parseInt(slider.value)
+    // マウス移動
+    document.addEventListener('mousemove', (e)=>{
+      const now = Date.now();
+      const dt = now - lastMoveTime;
+      const dx = e.clientX - lastMouseX;
+      const dy = e.clientY - lastMouseY;
+      const dist = Math.sqrt(dx*dx + dy*dy);
+      if (dt > 0) {
+        mouseSpeed = dist / dt; // px/ms
+      }
+      lastMouseX = e.clientX;
+      lastMouseY = e.clientY;
+      lastMoveTime = now;
     });
-  });
 
-  // マウス移動イベント
-  taskArea.addEventListener("mousemove", (e) => {
-    const timestamp = Date.now();
-    const rect = taskArea.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-
-    // マウス特徴量（簡易例）
-    dataLog.push({
-      timestamp,
-      mouse: { x, y },
-      emotion_label: parseInt(slider.value)  // スライダー現在値を紐付け
+    // クリック
+    document.addEventListener('click', ()=>{
+      clickCount++;
     });
-  });
 
-  // ダウンロードボタン
-  downloadBtn.addEventListener("click", () => {
-    const blob = new Blob([JSON.stringify(dataLog, null, 2)], {type: "application/json"});
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "calibration_data.json";
-    a.click();
-    URL.revokeObjectURL(url);
-    alert("データをダウンロードしました");
-  });
-</script>
+    // タイピング速度
+    document.addEventListener('keydown', ()=>{
+      const now = Date.now();
+      if (lastKeyTime) {
+        keyIntervals.push(now - lastKeyTime);
+        if (keyIntervals.length > 20) keyIntervals.shift();
+      }
+      lastKeyTime = now;
+    });
 
+    // 平均キー入力間隔
+    function getTypingSpeed(){
+      if (keyIntervals.length === 0) return 0;
+      const avg = keyIntervals.reduce((a,b)=>a+b,0)/keyIntervals.length;
+      return 1000/avg; // 回数/秒
+    }
+
+    // 特徴量抽出
+    function getFeatures(){
+      const typingSpeed = getTypingSpeed();
+      const features = [mouseSpeed, clickCount, typingSpeed];
+      clickCount = 0; // クリック数をリセットして時間窓化
+      return features;
+    }
+
+    // モデル構築
+    function createModel(){
+      const m = tf.sequential();
+      m.add(tf.layers.dense({inputShape:[3], units:16, activation:'relu'}));
+      m.add(tf.layers.dense({units:8, activation:'relu'}));
+      m.add(tf.layers.dense({units:3, activation:'softmax'}));
+      m.compile({optimizer: tf.train.adam(0.01), loss:'categoricalCrossentropy', metrics:['accuracy']});
+      return m;
+    }
+
+    // データ追加
+    document.getElementById('collect').addEventListener('click', ()=>{
+      const feat = getFeatures();
+      examples.push(feat);
+      labels.push(parseInt(document.getElementById('label').value));
+      document.getElementById('status').textContent = `データ数：${examples.length}`;
+    });
+
+    // 学習
+    document.getElementById('train').addEventListener('click', async ()=>{
+      if (examples.length < 5) return alert("データが少なすぎます");
+      const xs = tf.tensor2d(examples);
+      const ys = tf.oneHot(tf.tensor1d(labels,'int32'), 3);
+      model = createModel();
+      await model.fit(xs, ys, {epochs: 50, shuffle:true});
+      xs.dispose(); ys.dispose();
+      document.getElementById('status').textContent = "学習完了";
+    });
+
+    // 推定
+    document.getElementById('predict').addEventListener('click', async ()=>{
+      if (!model) return alert("学習してください");
+      const feat = getFeatures();
+      const t = tf.tensor2d([feat]);
+      const pred = model.predict(t);
+      const arr = await pred.data();
+      const maxIdx = arr.indexOf(Math.max(...arr));
+      document.getElementById('status').textContent = `推定結果：${classNames[maxIdx]} （確信度 ${(arr[maxIdx]*100).toFixed(1)}%）`;
+      t.dispose(); pred.dispose();
+    });
+  </script>
 </body>
 </html>
