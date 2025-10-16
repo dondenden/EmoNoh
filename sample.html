@@ -2,111 +2,152 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
-<title>感情推定データ収集</title>
+<title>感情推定プロトタイプ</title>
 <style>
   body { font-family: sans-serif; margin: 20px; }
-  #log { margin-top: 20px; height: 150px; overflow-y: auto; border: 1px solid #ccc; padding: 10px; }
-  #game-area { width: 100%; height: 300px; border: 1px solid #000; margin-top: 20px; position: relative; }
+  #log { margin-top: 10px; height: 120px; overflow-y: auto; border: 1px solid #ccc; padding: 5px; }
+  #game-area { width: 600px; height: 400px; border: 1px solid #000; position: relative; margin-top: 20px; }
+  #target { width: 50px; height: 50px; background: red; border-radius: 50%; position: absolute; cursor: pointer; }
+  #avatar { width:100px; height:100px; margin-top:20px; font-size:50px; text-align:center; }
 </style>
 </head>
 <body>
 
-<h2>感情推定データ収集ページ</h2>
-<p>ゲームエリアでマウスやキー操作をしてください。</p>
-<div id="game-area"></div>
+<h2>感情推定プロトタイプ（ミニゲーム付き）</h2>
+<p>赤いターゲットをクリックしてください。操作状況に応じてアバターが感情を表示します。</p>
 
+<div id="game-area">
+  <div id="target"></div>
+</div>
+<div id="avatar">😐</div>
 <div id="log"></div>
 
 <script>
 const logDiv = document.getElementById('log');
 const gameArea = document.getElementById('game-area');
+const target = document.getElementById('target');
+const avatar = document.getElementById('avatar');
 
-// データ格納用
+// データ格納
 let mouseData = [];
 let keyData = [];
+let targetClicks = [];
 
-// 前回タイムスタンプ
-let lastClickTime = null;
-let lastKeyTime = null;
-let lastMousePos = null;
+// ターゲット設定
+let targetSpeed = 2;
+let targetDir = {x:1, y:1};
 
-// マウス移動イベント
-gameArea.addEventListener('mousemove', e => {
-    const time = performance.now();
-    const pos = { x: e.offsetX, y: e.offsetY, t: time };
-    if(lastMousePos) {
-        const dx = pos.x - lastMousePos.x;
-        const dy = pos.y - lastMousePos.y;
-        const dt = (time - lastMousePos.t) / 1000; // 秒
-        const speed = Math.sqrt(dx*dx + dy*dy) / dt; // px/s
-        mouseData.push({ ...pos, speed });
-    }
-    lastMousePos = pos;
-});
-
-// クリックイベント
-gameArea.addEventListener('click', e => {
-    const time = performance.now();
-    let interval = null;
-    if(lastClickTime !== null) interval = time - lastClickTime;
-    lastClickTime = time;
-    mouseData.push({ type: 'click', x: e.offsetX, y: e.offsetY, interval });
-    log(`Click at (${e.offsetX},${e.offsetY}) interval: ${interval ? interval.toFixed(0)+'ms' : '-'}`);
-});
-
-// キーボードイベント
-document.addEventListener('keydown', e => {
-    const time = performance.now();
-    let interval = null;
-    if(lastKeyTime !== null) interval = time - lastKeyTime;
-    lastKeyTime = time;
-    keyData.push({ key: e.key, t: time, interval });
-    log(`Key: ${e.key} interval: ${interval ? interval.toFixed(0)+'ms' : '-'}`);
-});
+// ターゲット移動
+function moveTarget() {
+    let rect = gameArea.getBoundingClientRect();
+    let pos = target.getBoundingClientRect();
+    let newX = pos.left - rect.left + targetDir.x*targetSpeed;
+    let newY = pos.top - rect.top + targetDir.y*targetSpeed;
+    if(newX<0||newX>rect.width-50) targetDir.x*=-1;
+    if(newY<0||newY>rect.height-50) targetDir.y*=-1;
+    target.style.left=Math.max(0, Math.min(rect.width-50,newX))+'px';
+    target.style.top=Math.max(0, Math.min(rect.height-50,newY))+'px';
+    requestAnimationFrame(moveTarget);
+}
+moveTarget();
 
 // ログ表示
-function log(msg) {
-    const p = document.createElement('div');
-    p.textContent = msg;
+function log(msg){
+    const p=document.createElement('div');
+    p.textContent=msg;
     logDiv.appendChild(p);
-    logDiv.scrollTop = logDiv.scrollHeight;
+    logDiv.scrollTop=logDiv.scrollHeight;
 }
 
-// 特徴量計算
-function calculateFeatures() {
-    // マウス速度平均
-    const speeds = mouseData.filter(d => d.speed).map(d => d.speed);
-    const avgMouseSpeed = speeds.length ? (speeds.reduce((a,b)=>a+b,0)/speeds.length).toFixed(2) : 0;
+// マウス移動
+let lastMousePos=null;
+gameArea.addEventListener('mousemove', e=>{
+    const t=performance.now();
+    const pos={x:e.offsetX, y:e.offsetY, t};
+    if(lastMousePos){
+        const dx=pos.x-lastMousePos.x;
+        const dy=pos.y-lastMousePos.y;
+        const dt=(t-lastMousePos.t)/1000;
+        const speed=Math.sqrt(dx*dx+dy*dy)/dt;
+        mouseData.push({...pos, speed});
+    }
+    lastMousePos=pos;
+});
 
-    // クリック間隔平均
-    const clickIntervals = mouseData.filter(d => d.interval).map(d => d.interval);
-    const avgClickInterval = clickIntervals.length ? (clickIntervals.reduce((a,b)=>a+b,0)/clickIntervals.length).toFixed(0) : 0;
+// クリック
+target.addEventListener('click', e=>{
+    const t=performance.now();
+    mouseData.push({type:'click', x:e.offsetX, y:e.offsetY, t});
+    targetClicks.push({t, success:true});
+    log(`ターゲットクリック: ${e.offsetX},${e.offsetY}`);
+});
 
-    // キー間隔平均
-    const keyIntervals = keyData.filter(d => d.interval).map(d => d.interval);
-    const avgKeyInterval = keyIntervals.length ? (keyIntervals.reduce((a,b)=>a+b,0)/keyIntervals.length).toFixed(0) : 0;
+// キーボード
+let lastKeyTime=null;
+document.addEventListener('keydown', e=>{
+    const t=performance.now();
+    let interval=lastKeyTime? t-lastKeyTime:null;
+    lastKeyTime=t;
+    keyData.push({key:e.key, t, interval});
+});
 
-    log(`---特徴量---`);
-    log(`平均マウス速度: ${avgMouseSpeed} px/s`);
-    log(`平均クリック間隔: ${avgClickInterval} ms`);
-    log(`平均キー間隔: ${avgKeyInterval} ms`);
+// 感情推定（論文知見に基づくルールベース）
+function estimateEmotion(){
+    const now=performance.now();
+    let emotion='集中';
 
-    // LocalStorageに保存
-    const dataToSave = {
-        timestamp: new Date().toISOString(),
-        avgMouseSpeed,
-        avgClickInterval,
-        avgKeyInterval
-    };
-    let savedData = JSON.parse(localStorage.getItem('emotionData') || '[]');
-    savedData.push(dataToSave);
-    localStorage.setItem('emotionData', JSON.stringify(savedData));
-    log(`特徴量を保存しました。`);
+    // マウス速度
+    const speeds=mouseData.filter(d=>d.speed).map(d=>d.speed);
+    const avgSpeed=speeds.length?speeds.reduce((a,b)=>a+b,0)/speeds.length:0;
+
+    // タイピング安定性
+    const keyIntervals=keyData.filter(d=>d.interval).map(d=>d.interval);
+    const keyStd=keyIntervals.length? Math.sqrt(keyIntervals.map(x=>Math.pow(x-(keyIntervals.reduce((a,b)=>a+b,0)/keyIntervals.length),2)).reduce((a,b)=>a+b,0)/keyIntervals.length) :0;
+
+    // クリック成功率
+    const successRate=targetClicks.length? targetClicks.filter(c=>c.success).length/targetClicks.length :1;
+
+    if(avgSpeed<50||avgSpeed>500) emotion='困惑';
+    if(keyStd>200) emotion='困惑';
+    if(successRate<0.6) emotion='困惑';
+
+    const lastActionTime=Math.max(
+        mouseData.length? mouseData[mouseData.length-1].t:0,
+        keyData.length? keyData[keyData.length-1].t:0,
+        targetClicks.length? targetClicks[targetClicks.length-1].t:0
+    );
+    if(now-lastActionTime>8000) emotion='退屈';
+
+    return emotion;
 }
 
-// 10秒ごとに特徴量計算
-setInterval(calculateFeatures, 10000);
+// アバター更新
+function updateAvatar(){
+    const emotion=estimateEmotion();
+    if(emotion==='集中') avatar.textContent='😃';
+    else if(emotion==='困惑') avatar.textContent='😖';
+    else if(emotion==='退屈') avatar.textContent='😴';
+}
+
+// 特徴量＋ラベル保存
+function saveData(){
+    const now=new Date().toISOString();
+    const emotion=estimateEmotion();
+    const speeds=mouseData.filter(d=>d.speed).map(d=>d.speed);
+    const avgSpeed=speeds.length?speeds.reduce((a,b)=>a+b,0)/speeds.length:0;
+    const clickIntervals=targetClicks.map(c=>c.t);
+    const keyIntervals=keyData.filter(d=>d.interval).map(d=>d.interval);
+
+    const data={timestamp:now, avgMouseSpeed:avgSpeed, clickCount:targetClicks.length, avgKeyInterval: keyIntervals.length? keyIntervals.reduce((a,b)=>a+b,0)/keyIntervals.length:0, emotion};
+    let stored=JSON.parse(localStorage.getItem('emotionProto')||'[]');
+    stored.push(data);
+    localStorage.setItem('emotionProto',JSON.stringify(stored));
+    log(`データ保存: ${JSON.stringify(data)}`);
+}
+
+// 定期処理
+setInterval(()=>{updateAvatar(); saveData();},5000);
+
 </script>
-
 </body>
 </html>
