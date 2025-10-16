@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
-<title>感情推定プロトタイプ</title>
+<title>感情推定プロトタイプ（改善版）</title>
 <style>
   body { font-family: sans-serif; margin: 20px; }
   #log { margin-top: 10px; height: 120px; overflow-y: auto; border: 1px solid #ccc; padding: 5px; }
@@ -13,7 +13,7 @@
 </head>
 <body>
 
-<h2>感情推定プロトタイプ（ミニゲーム付き）</h2>
+<h2>感情推定プロトタイプ（改善版）</h2>
 <p>赤いターゲットをクリックしてください。操作状況に応じてアバターが感情を表示します。</p>
 
 <div id="game-area">
@@ -91,34 +91,36 @@ document.addEventListener('keydown', e=>{
     keyData.push({key:e.key, t, interval});
 });
 
-// 感情推定（論文知見に基づくルールベース）
+// 改善版：複合スコアによる感情推定
 function estimateEmotion(){
     const now=performance.now();
-    let emotion='集中';
+    let score = 0; // 0=集中,1=退屈,2以上=困惑
 
     // マウス速度
     const speeds=mouseData.filter(d=>d.speed).map(d=>d.speed);
     const avgSpeed=speeds.length?speeds.reduce((a,b)=>a+b,0)/speeds.length:0;
+    if(avgSpeed<20 || avgSpeed>300) score +=1;
 
-    // タイピング安定性
+    // キー入力安定性
     const keyIntervals=keyData.filter(d=>d.interval).map(d=>d.interval);
     const keyStd=keyIntervals.length? Math.sqrt(keyIntervals.map(x=>Math.pow(x-(keyIntervals.reduce((a,b)=>a+b,0)/keyIntervals.length),2)).reduce((a,b)=>a+b,0)/keyIntervals.length) :0;
+    if(keyStd>500) score +=1;
 
-    // クリック成功率
+    // クリック精度
     const successRate=targetClicks.length? targetClicks.filter(c=>c.success).length/targetClicks.length :1;
+    if(successRate<0.5) score +=1;
 
-    if(avgSpeed<50||avgSpeed>500) emotion='困惑';
-    if(keyStd>200) emotion='困惑';
-    if(successRate<0.6) emotion='困惑';
-
+    // 放置判定
     const lastActionTime=Math.max(
         mouseData.length? mouseData[mouseData.length-1].t:0,
         keyData.length? keyData[keyData.length-1].t:0,
         targetClicks.length? targetClicks[targetClicks.length-1].t:0
     );
-    if(now-lastActionTime>8000) emotion='退屈';
+    if(now-lastActionTime>8000) score = 1; // 退屈
 
-    return emotion;
+    if(score===0) return '集中';
+    else if(score===1) return '退屈';
+    else return '困惑';
 }
 
 // アバター更新
@@ -129,23 +131,23 @@ function updateAvatar(){
     else if(emotion==='退屈') avatar.textContent='😴';
 }
 
-// 特徴量＋ラベル保存
+// データ保存
 function saveData(){
     const now=new Date().toISOString();
     const emotion=estimateEmotion();
     const speeds=mouseData.filter(d=>d.speed).map(d=>d.speed);
     const avgSpeed=speeds.length?speeds.reduce((a,b)=>a+b,0)/speeds.length:0;
-    const clickIntervals=targetClicks.map(c=>c.t);
     const keyIntervals=keyData.filter(d=>d.interval).map(d=>d.interval);
+    const avgKeyInterval=keyIntervals.length? keyIntervals.reduce((a,b)=>a+b,0)/keyIntervals.length:0;
 
-    const data={timestamp:now, avgMouseSpeed:avgSpeed, clickCount:targetClicks.length, avgKeyInterval: keyIntervals.length? keyIntervals.reduce((a,b)=>a+b,0)/keyIntervals.length:0, emotion};
-    let stored=JSON.parse(localStorage.getItem('emotionProto')||'[]');
+    const data={timestamp:now, avgMouseSpeed:avgSpeed, clickCount:targetClicks.length, avgKeyInterval, emotion};
+    let stored=JSON.parse(localStorage.getItem('emotionProtoImproved')||'[]');
     stored.push(data);
-    localStorage.setItem('emotionProto',JSON.stringify(stored));
+    localStorage.setItem('emotionProtoImproved',JSON.stringify(stored));
     log(`データ保存: ${JSON.stringify(data)}`);
 }
 
-// 定期処理
+// 定期更新
 setInterval(()=>{updateAvatar(); saveData();},5000);
 
 </script>
