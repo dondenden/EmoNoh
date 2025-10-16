@@ -1,192 +1,112 @@
 <!DOCTYPE html>
 <html lang="ja">
 <head>
-  <meta charset="UTF-8">
-  <title>EmoNoh - Mouse Emotion Estimation</title>
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.12.0/dist/tf.min.js"></script>
-  <style>
-    body { font-family: sans-serif; background:#f5f7fa; padding:20px; }
-    #canvasArea {
-      background: white; border:1px solid #ccc;
-      width: 500px; height: 300px;
-      position: relative; cursor: crosshair;
-    }
-    #target { 
-      position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
-      width:50px; height:50px; background:red; border-radius:50%;
-    }
-    button { margin: 8px 5px; padding: 8px 14px; }
-  </style>
+<meta charset="UTF-8">
+<title>感情推定データ収集</title>
+<style>
+  body { font-family: sans-serif; margin: 20px; }
+  #log { margin-top: 20px; height: 150px; overflow-y: auto; border: 1px solid #ccc; padding: 10px; }
+  #game-area { width: 100%; height: 300px; border: 1px solid #000; margin-top: 20px; position: relative; }
+</style>
 </head>
 <body>
-  <h1>🖱 EmoNoh — マウス操作による感情推定デモ</h1>
-  <div>フェーズ: <span id="phaseLabel">未開始</span></div>
-  <div id="canvasArea">
-    <div id="target"></div>
-  </div>
-  <button id="startBtn">収集開始</button>
-  <button id="trainBtn">モデル学習</button>
-  <button id="predictBtn">推定テスト</button>
-  <button id="downloadBtn">CSVダウンロード</button>
-  <div id="status">状態: 待機中</div>
+
+<h2>感情推定データ収集ページ</h2>
+<p>ゲームエリアでマウスやキー操作をしてください。</p>
+<div id="game-area"></div>
+
+<div id="log"></div>
 
 <script>
-const phases = [
-  { label: "集中", targetSpeed: 1 },
-  { label: "困惑", targetSpeed: 2 }, 
-  { label: "退屈", targetSpeed: 0 }
-];
-let currentPhase = 0;
-let trial = 0;
-const totalTrials = 5;
+const logDiv = document.getElementById('log');
+const gameArea = document.getElementById('game-area');
 
-let moveStartTime = null;
-let totalDistance = 0;
-let lastX = null, lastY = null;
-let clickTimes = [];
-let reactionStart = null;
-let hasMoved = false;
-const data = [];
-let model = null;
+// データ格納用
+let mouseData = [];
+let keyData = [];
 
-const canvasArea = document.getElementById('canvasArea');
-const target = document.getElementById('target');
-const phaseLabel = document.getElementById('phaseLabel');
-const status = document.getElementById('status');
+// 前回タイムスタンプ
+let lastClickTime = null;
+let lastKeyTime = null;
+let lastMousePos = null;
 
-// ランダム位置へターゲット移動
-function moveTargetRandom(){
-  const x = Math.random() * (canvasArea.clientWidth - 50);
-  const y = Math.random() * (canvasArea.clientHeight - 50);
-  target.style.left = x + "px";
-  target.style.top = y + "px";
-  reactionStart = Date.now();
-  hasMoved = false;
-  totalDistance = 0;
-  lastX = null; lastY = null;
-  clickTimes = [];
+// マウス移動イベント
+gameArea.addEventListener('mousemove', e => {
+    const time = performance.now();
+    const pos = { x: e.offsetX, y: e.offsetY, t: time };
+    if(lastMousePos) {
+        const dx = pos.x - lastMousePos.x;
+        const dy = pos.y - lastMousePos.y;
+        const dt = (time - lastMousePos.t) / 1000; // 秒
+        const speed = Math.sqrt(dx*dx + dy*dy) / dt; // px/s
+        mouseData.push({ ...pos, speed });
+    }
+    lastMousePos = pos;
+});
+
+// クリックイベント
+gameArea.addEventListener('click', e => {
+    const time = performance.now();
+    let interval = null;
+    if(lastClickTime !== null) interval = time - lastClickTime;
+    lastClickTime = time;
+    mouseData.push({ type: 'click', x: e.offsetX, y: e.offsetY, interval });
+    log(`Click at (${e.offsetX},${e.offsetY}) interval: ${interval ? interval.toFixed(0)+'ms' : '-'}`);
+});
+
+// キーボードイベント
+document.addEventListener('keydown', e => {
+    const time = performance.now();
+    let interval = null;
+    if(lastKeyTime !== null) interval = time - lastKeyTime;
+    lastKeyTime = time;
+    keyData.push({ key: e.key, t: time, interval });
+    log(`Key: ${e.key} interval: ${interval ? interval.toFixed(0)+'ms' : '-'}`);
+});
+
+// ログ表示
+function log(msg) {
+    const p = document.createElement('div');
+    p.textContent = msg;
+    logDiv.appendChild(p);
+    logDiv.scrollTop = logDiv.scrollHeight;
 }
 
-canvasArea.addEventListener('mousemove', (e)=>{
-  const now = Date.now();
-  if (!moveStartTime) moveStartTime = now;
-  if (lastX !== null) {
-    const dx = e.offsetX - lastX;
-    const dy = e.offsetY - lastY;
-    const dist = Math.sqrt(dx*dx+dy*dy);
-    totalDistance += dist;
-  } else {
-    // 最初の移動の反応時間
-    if (!hasMoved && reactionStart){
-      const rt = now - reactionStart;
-      reactionTime = rt;
-      hasMoved = true;
-    }
-  }
-  lastX = e.offsetX;
-  lastY = e.offsetY;
-});
+// 特徴量計算
+function calculateFeatures() {
+    // マウス速度平均
+    const speeds = mouseData.filter(d => d.speed).map(d => d.speed);
+    const avgMouseSpeed = speeds.length ? (speeds.reduce((a,b)=>a+b,0)/speeds.length).toFixed(2) : 0;
 
-canvasArea.addEventListener('click', ()=>{
-  clickTimes.push(Date.now());
-});
+    // クリック間隔平均
+    const clickIntervals = mouseData.filter(d => d.interval).map(d => d.interval);
+    const avgClickInterval = clickIntervals.length ? (clickIntervals.reduce((a,b)=>a+b,0)/clickIntervals.length).toFixed(0) : 0;
 
-// trial 終了時に特徴量抽出
-function finishTrial(){
-  const elapsed = (Date.now() - reactionStart);
-  const avgSpeed = elapsed > 0 ? totalDistance / elapsed : 0;
+    // キー間隔平均
+    const keyIntervals = keyData.filter(d => d.interval).map(d => d.interval);
+    const avgKeyInterval = keyIntervals.length ? (keyIntervals.reduce((a,b)=>a+b,0)/keyIntervals.length).toFixed(0) : 0;
 
-  let clickInterval = 0;
-  if (clickTimes.length > 1) {
-    const diffs = [];
-    for (let i=1;i<clickTimes.length;i++){
-      diffs.push(clickTimes[i]-clickTimes[i-1]);
-    }
-    clickInterval = diffs.reduce((a,b)=>a+b)/diffs.length;
-  }
+    log(`---特徴量---`);
+    log(`平均マウス速度: ${avgMouseSpeed} px/s`);
+    log(`平均クリック間隔: ${avgClickInterval} ms`);
+    log(`平均キー間隔: ${avgKeyInterval} ms`);
 
-  data.push({
-    phase: currentPhase,
-    phaseLabel: phases[currentPhase].label,
-    avgSpeed: avgSpeed.toFixed(2),
-    reactionTime: hasMoved ? reactionTime : 0,
-    clickInterval: clickInterval.toFixed(2)
-  });
-
-  trial++;
-  if (trial >= totalTrials) {
-    trial = 0;
-    currentPhase++;
-    if (currentPhase >= phases.length){
-      status.textContent = "✅ データ収集完了";
-      return;
-    }
-  }
-  setTimeout(moveTargetRandom, 1000);
+    // LocalStorageに保存
+    const dataToSave = {
+        timestamp: new Date().toISOString(),
+        avgMouseSpeed,
+        avgClickInterval,
+        avgKeyInterval
+    };
+    let savedData = JSON.parse(localStorage.getItem('emotionData') || '[]');
+    savedData.push(dataToSave);
+    localStorage.setItem('emotionData', JSON.stringify(savedData));
+    log(`特徴量を保存しました。`);
 }
 
-document.getElementById('startBtn').addEventListener('click', ()=>{
-  currentPhase = 0;
-  trial = 0;
-  phaseLabel.textContent = phases[currentPhase].label;
-  moveTargetRandom();
-  status.textContent = "収集中...";
-  // trial毎に5秒後に終了
-  const interval = setInterval(()=>{
-    finishTrial();
-    if (currentPhase >= phases.length) clearInterval(interval);
-    else phaseLabel.textContent = phases[currentPhase].label;
-  }, 5000);
-});
-
-// =====================
-// TensorFlow.js
-// =====================
-function createModel(){
-  const m = tf.sequential();
-  m.add(tf.layers.dense({inputShape:[3], units:16, activation:'relu'}));
-  m.add(tf.layers.dense({units:8, activation:'relu'}));
-  m.add(tf.layers.dense({units:3, activation:'softmax'}));
-  m.compile({optimizer: tf.train.adam(0.01), loss:'categoricalCrossentropy', metrics:['accuracy']});
-  return m;
-}
-
-document.getElementById('trainBtn').addEventListener('click', async ()=>{
-  if (data.length < 10) return alert("データが少なすぎます");
-  const xs = tf.tensor2d(data.map(d=>[+d.avgSpeed, +d.reactionTime, +d.clickInterval]));
-  const ys = tf.oneHot(tf.tensor1d(data.map(d=>d.phase),'int32'), 3);
-  model = createModel();
-  await model.fit(xs, ys, {epochs: 50, shuffle:true});
-  xs.dispose(); ys.dispose();
-  status.textContent = "🧠 モデル学習完了";
-});
-
-document.getElementById('predictBtn').addEventListener('click', ()=>{
-  if (!model) return alert("モデルを先に学習してください");
-  const feat = [0.5, 200, 300]; // テスト値（実際には別の入力を収集して予測）
-  const t = tf.tensor2d([feat]);
-  const pred = model.predict(t);
-  pred.data().then(arr=>{
-    const idx = arr.indexOf(Math.max(...arr));
-    status.textContent = `🪞 推定結果: ${phases[idx].label} (確信度 ${(arr[idx]*100).toFixed(1)}%)`;
-    t.dispose(); pred.dispose();
-  });
-});
-
-// CSV ダウンロード
-document.getElementById('downloadBtn').addEventListener('click', ()=>{
-  if (data.length === 0) return alert("データがありません");
-  const header = Object.keys(data[0]).join(",");
-  const rows = data.map(obj => Object.values(obj).join(","));
-  const csv = [header, ...rows].join("\n");
-  const blob = new Blob([csv], {type:"text/csv"});
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = "mouse_emotion_data.csv";
-  a.click();
-  URL.revokeObjectURL(url);
-});
+// 10秒ごとに特徴量計算
+setInterval(calculateFeatures, 10000);
 </script>
+
 </body>
 </html>
