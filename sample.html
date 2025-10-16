@@ -2,15 +2,55 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <title>EmoNoh インタラクション感情推定デモ</title>
+  <title>EmoNoh Keystroke Emotion Estimation Demo</title>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.12.0/dist/tf.min.js"></script>
+  <style>
+    body {
+      font-family: "Segoe UI", sans-serif;
+      padding: 20px;
+      background-color: #f0f4f9;
+    }
+    h1 {
+      margin-bottom: 10px;
+    }
+    #gameArea {
+      background: white;
+      padding: 20px;
+      border-radius: 10px;
+      box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+      max-width: 500px;
+    }
+    #target {
+      font-size: 28px;
+      font-weight: bold;
+      margin-bottom: 10px;
+    }
+    #inputBox {
+      font-size: 24px;
+      width: 100%;
+      padding: 5px;
+    }
+    button {
+      margin-top: 5px;
+      margin-right: 5px;
+      padding: 8px 12px;
+      font-size: 16px;
+    }
+    #status {
+      margin-top: 15px;
+      font-weight: bold;
+    }
+  </style>
 </head>
 <body>
-  <h1>EmoNoh — インタラクションデータで感情推定</h1>
-  <p>操作してデータをためてください（マウスを動かす・タイピングなど）</p>
+  <h1>🎮 EmoNoh — Keystroke 感情推定デモ（3クラス）</h1>
 
-  <div>
-    ラベル：
+  <div id="gameArea">
+    <div id="target">--- START ---</div>
+    <input type="text" id="inputBox" placeholder="ここに入力" disabled>
+
+    <br>
+    <button id="startGame">ゲーム開始</button>
     <select id="label">
       <option value="0">集中</option>
       <option value="1">困惑</option>
@@ -19,66 +59,75 @@
     <button id="collect">データ追加</button>
     <button id="train">モデル学習</button>
     <button id="predict">感情推定</button>
-  </div>
 
-  <p id="status">状態: まだ学習していません</p>
+    <div id="status">状態: 待機中</div>
+  </div>
 
   <script>
     const classNames = ["集中", "困惑", "退屈"];
+    const input = document.getElementById('inputBox');
+    const target = document.getElementById('target');
+    const status = document.getElementById('status');
+
     let model;
     const examples = [];
     const labels = [];
 
-    // インタラクションデータ用変数
-    let lastMouseX = 0, lastMouseY = 0, lastMoveTime = Date.now();
-    let mouseSpeed = 0;
-    let clickCount = 0;
-    let keyIntervals = [];
+    let keystrokeIntervals = [];
     let lastKeyTime = null;
+    let errorCount = 0;
+    let startTime;
+    let word;
+    let finished = false;
 
-    // マウス移動
-    document.addEventListener('mousemove', (e)=>{
-      const now = Date.now();
-      const dt = now - lastMoveTime;
-      const dx = e.clientX - lastMouseX;
-      const dy = e.clientY - lastMouseY;
-      const dist = Math.sqrt(dx*dx + dy*dy);
-      if (dt > 0) {
-        mouseSpeed = dist / dt; // px/ms
-      }
-      lastMouseX = e.clientX;
-      lastMouseY = e.clientY;
-      lastMoveTime = now;
+    // ランダムな単語生成
+    function randomWord(length=6){
+      const chars = 'abcdefghijklmnopqrstuvwxyz';
+      return Array.from({length},()=>chars[Math.floor(Math.random()*chars.length)]).join('');
+    }
+
+    // ゲーム開始
+    document.getElementById('startGame').addEventListener('click', ()=>{
+      word = randomWord(5 + Math.floor(Math.random()*4));
+      target.textContent = word;
+      input.value = '';
+      input.disabled = false;
+      input.focus();
+      keystrokeIntervals = [];
+      lastKeyTime = null;
+      errorCount = 0;
+      finished = false;
+      startTime = Date.now();
+      status.textContent = "状態: プレイ中...";
     });
 
-    // クリック
-    document.addEventListener('click', ()=>{
-      clickCount++;
-    });
-
-    // タイピング速度
-    document.addEventListener('keydown', ()=>{
+    // キー押下間隔の記録
+    input.addEventListener('keydown', e=>{
+      if (finished) return;
       const now = Date.now();
-      if (lastKeyTime) {
-        keyIntervals.push(now - lastKeyTime);
-        if (keyIntervals.length > 20) keyIntervals.shift();
-      }
+      if (lastKeyTime) keystrokeIntervals.push(now - lastKeyTime);
       lastKeyTime = now;
     });
 
-    // 平均キー入力間隔
-    function getTypingSpeed(){
-      if (keyIntervals.length === 0) return 0;
-      const avg = keyIntervals.reduce((a,b)=>a+b,0)/keyIntervals.length;
-      return 1000/avg; // 回数/秒
-    }
+    // 入力中にミスカウント
+    input.addEventListener('input', ()=>{
+      const val = input.value;
+      if (!word.startsWith(val)) errorCount++;
+      if (val === word) {
+        finished = true;
+        const duration = Date.now() - startTime;
+        input.disabled = true;
+        status.textContent = `✅ 完了！ 所要時間: ${duration}ms | エラー数: ${errorCount}`;
+      }
+    });
 
     // 特徴量抽出
     function getFeatures(){
-      const typingSpeed = getTypingSpeed();
-      const features = [mouseSpeed, clickCount, typingSpeed];
-      clickCount = 0; // クリック数をリセットして時間窓化
-      return features;
+      const avgInterval = keystrokeIntervals.length
+        ? keystrokeIntervals.reduce((a,b)=>a+b,0)/keystrokeIntervals.length
+        : 0;
+      const speed = word.length / ((Date.now()-startTime)/1000);
+      return [avgInterval || 0, errorCount, speed];
     }
 
     // モデル構築
@@ -94,31 +143,32 @@
     // データ追加
     document.getElementById('collect').addEventListener('click', ()=>{
       const feat = getFeatures();
+      if (feat[2] === 0) return alert("まずゲームを1回プレイしてください");
       examples.push(feat);
       labels.push(parseInt(document.getElementById('label').value));
-      document.getElementById('status').textContent = `データ数：${examples.length}`;
+      status.textContent = `📊 データ数: ${examples.length}`;
     });
 
     // 学習
     document.getElementById('train').addEventListener('click', async ()=>{
-      if (examples.length < 5) return alert("データが少なすぎます");
+      if (examples.length < 5) return alert("データが少なすぎます（最低5件以上）");
       const xs = tf.tensor2d(examples);
       const ys = tf.oneHot(tf.tensor1d(labels,'int32'), 3);
       model = createModel();
       await model.fit(xs, ys, {epochs: 50, shuffle:true});
       xs.dispose(); ys.dispose();
-      document.getElementById('status').textContent = "学習完了";
+      status.textContent = "🧠 モデル学習完了";
     });
 
     // 推定
     document.getElementById('predict').addEventListener('click', async ()=>{
-      if (!model) return alert("学習してください");
+      if (!model) return alert("モデルを先に学習してください");
       const feat = getFeatures();
       const t = tf.tensor2d([feat]);
       const pred = model.predict(t);
       const arr = await pred.data();
-      const maxIdx = arr.indexOf(Math.max(...arr));
-      document.getElementById('status').textContent = `推定結果：${classNames[maxIdx]} （確信度 ${(arr[maxIdx]*100).toFixed(1)}%）`;
+      const idx = arr.indexOf(Math.max(...arr));
+      status.textContent = `🪞 推定感情: ${classNames[idx]} (確信度 ${(arr[idx]*100).toFixed(1)}%)`;
       t.dispose(); pred.dispose();
     });
   </script>
