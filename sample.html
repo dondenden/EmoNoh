@@ -2,199 +2,191 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <title>EmoNoh Keystroke Emotion Estimation - 自動ラベル版</title>
+  <title>EmoNoh - Mouse Emotion Estimation</title>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.12.0/dist/tf.min.js"></script>
   <style>
-    body { font-family: sans-serif; background:#f3f6fb; padding:20px; }
-    #gameArea {
-      background:white; padding:20px; max-width:500px;
-      border-radius:10px; box-shadow:0 2px 8px rgba(0,0,0,0.1);
+    body { font-family: sans-serif; background:#f5f7fa; padding:20px; }
+    #canvasArea {
+      background: white; border:1px solid #ccc;
+      width: 500px; height: 300px;
+      position: relative; cursor: crosshair;
     }
-    #target { font-size: 28px; font-weight: bold; margin-bottom: 10px; }
-    #inputBox { font-size: 24px; width: 100%; padding: 5px; }
-    button { margin-top: 8px; margin-right: 5px; padding: 8px 14px; }
-    #status { margin-top: 15px; font-weight: bold; }
-    #phaseLabel { font-weight:bold; color:#555; }
+    #target { 
+      position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
+      width:50px; height:50px; background:red; border-radius:50%;
+    }
+    button { margin: 8px 5px; padding: 8px 14px; }
   </style>
 </head>
 <body>
-  <h1>🎮 EmoNoh — 自動ラベリング付き Keystroke 感情推定</h1>
-
-  <div id="gameArea">
-    <div>現在のフェーズ: <span id="phaseLabel">未開始</span></div>
-    <div id="target">--- START ---</div>
-    <input type="text" id="inputBox" disabled>
-    <br>
-    <button id="startGame">スタート</button>
-    <button id="train">モデル学習</button>
-    <button id="predict">推定</button>
-    <div id="status">状態: 待機中</div>
+  <h1>🖱 EmoNoh — マウス操作による感情推定デモ</h1>
+  <div>フェーズ: <span id="phaseLabel">未開始</span></div>
+  <div id="canvasArea">
+    <div id="target"></div>
   </div>
+  <button id="startBtn">収集開始</button>
+  <button id="trainBtn">モデル学習</button>
+  <button id="predictBtn">推定テスト</button>
+  <button id="downloadBtn">CSVダウンロード</button>
+  <div id="status">状態: 待機中</div>
 
-  <script>
-    const classNames = ["集中", "困惑", "退屈"];
-    const phaseLabel = document.getElementById('phaseLabel');
-    const target = document.getElementById('target');
-    const input = document.getElementById('inputBox');
-    const status = document.getElementById('status');
+<script>
+const phases = [
+  { label: "集中", targetSpeed: 1 },
+  { label: "困惑", targetSpeed: 2 }, 
+  { label: "退屈", targetSpeed: 0 }
+];
+let currentPhase = 0;
+let trial = 0;
+const totalTrials = 5;
 
-    let currentPhase = 0; // 0=集中,1=困惑,2=退屈
-    let trialCount = 0;
-    const totalTrialsPerPhase = 5;
+let moveStartTime = null;
+let totalDistance = 0;
+let lastX = null, lastY = null;
+let clickTimes = [];
+let reactionStart = null;
+let hasMoved = false;
+const data = [];
+let model = null;
 
-    let model;
-    const examples = [];
-    const labels = [];
+const canvasArea = document.getElementById('canvasArea');
+const target = document.getElementById('target');
+const phaseLabel = document.getElementById('phaseLabel');
+const status = document.getElementById('status');
 
-    let keystrokeIntervals = [];
-    let lastKeyTime = null;
-    let errorCount = 0;
-    let startTime;
-    let word;
-    let finished = false;
-    let timeLimit = null;
-    let timerId = null;
+// ランダム位置へターゲット移動
+function moveTargetRandom(){
+  const x = Math.random() * (canvasArea.clientWidth - 50);
+  const y = Math.random() * (canvasArea.clientHeight - 50);
+  target.style.left = x + "px";
+  target.style.top = y + "px";
+  reactionStart = Date.now();
+  hasMoved = false;
+  totalDistance = 0;
+  lastX = null; lastY = null;
+  clickTimes = [];
+}
 
-    function randomWord(length){
-      const chars = 'abcdefghijklmnopqrstuvwxyz';
-      return Array.from({length},()=>chars[Math.floor(Math.random()*chars.length)]).join('');
+canvasArea.addEventListener('mousemove', (e)=>{
+  const now = Date.now();
+  if (!moveStartTime) moveStartTime = now;
+  if (lastX !== null) {
+    const dx = e.offsetX - lastX;
+    const dy = e.offsetY - lastY;
+    const dist = Math.sqrt(dx*dx+dy*dy);
+    totalDistance += dist;
+  } else {
+    // 最初の移動の反応時間
+    if (!hasMoved && reactionStart){
+      const rt = now - reactionStart;
+      reactionTime = rt;
+      hasMoved = true;
     }
+  }
+  lastX = e.offsetX;
+  lastY = e.offsetY;
+});
 
-    // 難易度設定
-    function getWordForPhase(phase){
-      if (phase === 0) return randomWord(5);    // Easy
-      if (phase === 1) return randomWord(10);   // Hard
-      if (phase === 2) return randomWord(3);    // Boring
+canvasArea.addEventListener('click', ()=>{
+  clickTimes.push(Date.now());
+});
+
+// trial 終了時に特徴量抽出
+function finishTrial(){
+  const elapsed = (Date.now() - reactionStart);
+  const avgSpeed = elapsed > 0 ? totalDistance / elapsed : 0;
+
+  let clickInterval = 0;
+  if (clickTimes.length > 1) {
+    const diffs = [];
+    for (let i=1;i<clickTimes.length;i++){
+      diffs.push(clickTimes[i]-clickTimes[i-1]);
     }
+    clickInterval = diffs.reduce((a,b)=>a+b)/diffs.length;
+  }
 
-    function getTimeLimitForPhase(phase){
-      if (phase === 0) return null;   // 無制限
-      if (phase === 1) return 5000;   // 5秒
-      if (phase === 2) return null;   // 無制限
+  data.push({
+    phase: currentPhase,
+    phaseLabel: phases[currentPhase].label,
+    avgSpeed: avgSpeed.toFixed(2),
+    reactionTime: hasMoved ? reactionTime : 0,
+    clickInterval: clickInterval.toFixed(2)
+  });
+
+  trial++;
+  if (trial >= totalTrials) {
+    trial = 0;
+    currentPhase++;
+    if (currentPhase >= phases.length){
+      status.textContent = "✅ データ収集完了";
+      return;
     }
+  }
+  setTimeout(moveTargetRandom, 1000);
+}
 
-    // ゲーム1回分開始
-    function startTrial(){
-      const wordLength = getWordForPhase(currentPhase);
-      word = getWordForPhase(currentPhase);
-      timeLimit = getTimeLimitForPhase(currentPhase);
-      target.textContent = word;
-      input.value = '';
-      input.disabled = false;
-      input.focus();
-      keystrokeIntervals = [];
-      lastKeyTime = null;
-      errorCount = 0;
-      finished = false;
-      startTime = Date.now();
-      status.textContent = `状態: プレイ中 (${classNames[currentPhase]})`;
+document.getElementById('startBtn').addEventListener('click', ()=>{
+  currentPhase = 0;
+  trial = 0;
+  phaseLabel.textContent = phases[currentPhase].label;
+  moveTargetRandom();
+  status.textContent = "収集中...";
+  // trial毎に5秒後に終了
+  const interval = setInterval(()=>{
+    finishTrial();
+    if (currentPhase >= phases.length) clearInterval(interval);
+    else phaseLabel.textContent = phases[currentPhase].label;
+  }, 5000);
+});
 
-      if (timeLimit) {
-        timerId = setTimeout(()=>{
-          if (!finished) {
-            input.disabled = true;
-            finished = true;
-            recordData();
-            nextTrial();
-          }
-        }, timeLimit);
-      }
-    }
+// =====================
+// TensorFlow.js
+// =====================
+function createModel(){
+  const m = tf.sequential();
+  m.add(tf.layers.dense({inputShape:[3], units:16, activation:'relu'}));
+  m.add(tf.layers.dense({units:8, activation:'relu'}));
+  m.add(tf.layers.dense({units:3, activation:'softmax'}));
+  m.compile({optimizer: tf.train.adam(0.01), loss:'categoricalCrossentropy', metrics:['accuracy']});
+  return m;
+}
 
-    // キー押下間隔
-    input.addEventListener('keydown', e=>{
-      if (finished) return;
-      const now = Date.now();
-      if (lastKeyTime) keystrokeIntervals.push(now - lastKeyTime);
-      lastKeyTime = now;
-    });
+document.getElementById('trainBtn').addEventListener('click', async ()=>{
+  if (data.length < 10) return alert("データが少なすぎます");
+  const xs = tf.tensor2d(data.map(d=>[+d.avgSpeed, +d.reactionTime, +d.clickInterval]));
+  const ys = tf.oneHot(tf.tensor1d(data.map(d=>d.phase),'int32'), 3);
+  model = createModel();
+  await model.fit(xs, ys, {epochs: 50, shuffle:true});
+  xs.dispose(); ys.dispose();
+  status.textContent = "🧠 モデル学習完了";
+});
 
-    // 入力中にミス検出
-    input.addEventListener('input', ()=>{
-      const val = input.value;
-      if (!word.startsWith(val)) errorCount++;
-      if (val === word) {
-        finished = true;
-        input.disabled = true;
-        if (timerId) clearTimeout(timerId);
-        recordData();
-        nextTrial();
-      }
-    });
+document.getElementById('predictBtn').addEventListener('click', ()=>{
+  if (!model) return alert("モデルを先に学習してください");
+  const feat = [0.5, 200, 300]; // テスト値（実際には別の入力を収集して予測）
+  const t = tf.tensor2d([feat]);
+  const pred = model.predict(t);
+  pred.data().then(arr=>{
+    const idx = arr.indexOf(Math.max(...arr));
+    status.textContent = `🪞 推定結果: ${phases[idx].label} (確信度 ${(arr[idx]*100).toFixed(1)}%)`;
+    t.dispose(); pred.dispose();
+  });
+});
 
-    // 特徴量抽出
-    function getFeatures(){
-      const avgInterval = keystrokeIntervals.length
-        ? keystrokeIntervals.reduce((a,b)=>a+b,0)/keystrokeIntervals.length
-        : 0;
-      const speed = word.length / ((Date.now()-startTime)/1000);
-      return [avgInterval || 0, errorCount, speed];
-    }
-
-    // データ記録
-    function recordData(){
-      const feat = getFeatures();
-      examples.push(feat);
-      labels.push(currentPhase);
-      status.textContent = `📊 データ数: ${examples.length}`;
-    }
-
-    // 次のトライアルへ
-    function nextTrial(){
-      trialCount++;
-      if (trialCount >= totalTrialsPerPhase) {
-        currentPhase++;
-        trialCount = 0;
-        if (currentPhase > 2) {
-          status.textContent = "✅ すべてのフェーズが完了しました！";
-          input.disabled = true;
-          return;
-        }
-      }
-      phaseLabel.textContent = classNames[currentPhase];
-      setTimeout(startTrial, 1000);
-    }
-
-    // ゲーム全体開始
-    document.getElementById('startGame').addEventListener('click', ()=>{
-      currentPhase = 0;
-      trialCount = 0;
-      phaseLabel.textContent = classNames[currentPhase];
-      startTrial();
-    });
-
-    // モデル構築
-    function createModel(){
-      const m = tf.sequential();
-      m.add(tf.layers.dense({inputShape:[3], units:16, activation:'relu'}));
-      m.add(tf.layers.dense({units:8, activation:'relu'}));
-      m.add(tf.layers.dense({units:3, activation:'softmax'}));
-      m.compile({optimizer: tf.train.adam(0.01), loss:'categoricalCrossentropy', metrics:['accuracy']});
-      return m;
-    }
-
-    // 学習
-    document.getElementById('train').addEventListener('click', async ()=>{
-      if (examples.length < 10) return alert("データが足りません。まずゲームを実行してください。");
-      const xs = tf.tensor2d(examples);
-      const ys = tf.oneHot(tf.tensor1d(labels,'int32'), 3);
-      model = createModel();
-      await model.fit(xs, ys, {epochs: 50, shuffle:true});
-      xs.dispose(); ys.dispose();
-      status.textContent = "🧠 モデル学習完了";
-    });
-
-    // 推定
-    document.getElementById('predict').addEventListener('click', async ()=>{
-      if (!model) return alert("モデルを先に学習してください");
-      const feat = getFeatures();
-      const t = tf.tensor2d([feat]);
-      const pred = model.predict(t);
-      const arr = await pred.data();
-      const idx = arr.indexOf(Math.max(...arr));
-      status.textContent = `🪞 推定感情: ${classNames[idx]} (確信度 ${(arr[idx]*100).toFixed(1)}%)`;
-      t.dispose(); pred.dispose();
-    });
-  </script>
+// CSV ダウンロード
+document.getElementById('downloadBtn').addEventListener('click', ()=>{
+  if (data.length === 0) return alert("データがありません");
+  const header = Object.keys(data[0]).join(",");
+  const rows = data.map(obj => Object.values(obj).join(","));
+  const csv = [header, ...rows].join("\n");
+  const blob = new Blob([csv], {type:"text/csv"});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = "mouse_emotion_data.csv";
+  a.click();
+  URL.revokeObjectURL(url);
+});
+</script>
 </body>
 </html>
