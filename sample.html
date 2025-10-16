@@ -2,72 +2,45 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <title>EmoNoh Keystroke Emotion Estimation Demo</title>
+  <title>EmoNoh Keystroke Emotion Estimation - 自動ラベル版</title>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.12.0/dist/tf.min.js"></script>
   <style>
-    body {
-      font-family: "Segoe UI", sans-serif;
-      padding: 20px;
-      background-color: #f0f4f9;
-    }
-    h1 {
-      margin-bottom: 10px;
-    }
+    body { font-family: sans-serif; background:#f3f6fb; padding:20px; }
     #gameArea {
-      background: white;
-      padding: 20px;
-      border-radius: 10px;
-      box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-      max-width: 500px;
+      background:white; padding:20px; max-width:500px;
+      border-radius:10px; box-shadow:0 2px 8px rgba(0,0,0,0.1);
     }
-    #target {
-      font-size: 28px;
-      font-weight: bold;
-      margin-bottom: 10px;
-    }
-    #inputBox {
-      font-size: 24px;
-      width: 100%;
-      padding: 5px;
-    }
-    button {
-      margin-top: 5px;
-      margin-right: 5px;
-      padding: 8px 12px;
-      font-size: 16px;
-    }
-    #status {
-      margin-top: 15px;
-      font-weight: bold;
-    }
+    #target { font-size: 28px; font-weight: bold; margin-bottom: 10px; }
+    #inputBox { font-size: 24px; width: 100%; padding: 5px; }
+    button { margin-top: 8px; margin-right: 5px; padding: 8px 14px; }
+    #status { margin-top: 15px; font-weight: bold; }
+    #phaseLabel { font-weight:bold; color:#555; }
   </style>
 </head>
 <body>
-  <h1>🎮 EmoNoh — Keystroke 感情推定デモ（3クラス）</h1>
+  <h1>🎮 EmoNoh — 自動ラベリング付き Keystroke 感情推定</h1>
 
   <div id="gameArea">
+    <div>現在のフェーズ: <span id="phaseLabel">未開始</span></div>
     <div id="target">--- START ---</div>
-    <input type="text" id="inputBox" placeholder="ここに入力" disabled>
-
+    <input type="text" id="inputBox" disabled>
     <br>
-    <button id="startGame">ゲーム開始</button>
-    <select id="label">
-      <option value="0">集中</option>
-      <option value="1">困惑</option>
-      <option value="2">退屈</option>
-    </select>
-    <button id="collect">データ追加</button>
+    <button id="startGame">スタート</button>
     <button id="train">モデル学習</button>
-    <button id="predict">感情推定</button>
-
+    <button id="predict">推定</button>
     <div id="status">状態: 待機中</div>
   </div>
 
   <script>
     const classNames = ["集中", "困惑", "退屈"];
-    const input = document.getElementById('inputBox');
+    const phaseLabel = document.getElementById('phaseLabel');
     const target = document.getElementById('target');
+    const input = document.getElementById('inputBox');
     const status = document.getElementById('status');
+
+    let currentPhase = 0; // 0=集中,1=困惑,2=退屈
+    let trialCount = 0;
+    const totalTrialsPerPhase = 5;
 
     let model;
     const examples = [];
@@ -79,16 +52,32 @@
     let startTime;
     let word;
     let finished = false;
+    let timeLimit = null;
+    let timerId = null;
 
-    // ランダムな単語生成
-    function randomWord(length=6){
+    function randomWord(length){
       const chars = 'abcdefghijklmnopqrstuvwxyz';
       return Array.from({length},()=>chars[Math.floor(Math.random()*chars.length)]).join('');
     }
 
-    // ゲーム開始
-    document.getElementById('startGame').addEventListener('click', ()=>{
-      word = randomWord(5 + Math.floor(Math.random()*4));
+    // 難易度設定
+    function getWordForPhase(phase){
+      if (phase === 0) return randomWord(5);    // Easy
+      if (phase === 1) return randomWord(10);   // Hard
+      if (phase === 2) return randomWord(3);    // Boring
+    }
+
+    function getTimeLimitForPhase(phase){
+      if (phase === 0) return null;   // 無制限
+      if (phase === 1) return 5000;   // 5秒
+      if (phase === 2) return null;   // 無制限
+    }
+
+    // ゲーム1回分開始
+    function startTrial(){
+      const wordLength = getWordForPhase(currentPhase);
+      word = getWordForPhase(currentPhase);
+      timeLimit = getTimeLimitForPhase(currentPhase);
       target.textContent = word;
       input.value = '';
       input.disabled = false;
@@ -98,10 +87,21 @@
       errorCount = 0;
       finished = false;
       startTime = Date.now();
-      status.textContent = "状態: プレイ中...";
-    });
+      status.textContent = `状態: プレイ中 (${classNames[currentPhase]})`;
 
-    // キー押下間隔の記録
+      if (timeLimit) {
+        timerId = setTimeout(()=>{
+          if (!finished) {
+            input.disabled = true;
+            finished = true;
+            recordData();
+            nextTrial();
+          }
+        }, timeLimit);
+      }
+    }
+
+    // キー押下間隔
     input.addEventListener('keydown', e=>{
       if (finished) return;
       const now = Date.now();
@@ -109,15 +109,16 @@
       lastKeyTime = now;
     });
 
-    // 入力中にミスカウント
+    // 入力中にミス検出
     input.addEventListener('input', ()=>{
       const val = input.value;
       if (!word.startsWith(val)) errorCount++;
       if (val === word) {
         finished = true;
-        const duration = Date.now() - startTime;
         input.disabled = true;
-        status.textContent = `✅ 完了！ 所要時間: ${duration}ms | エラー数: ${errorCount}`;
+        if (timerId) clearTimeout(timerId);
+        recordData();
+        nextTrial();
       }
     });
 
@@ -130,6 +131,38 @@
       return [avgInterval || 0, errorCount, speed];
     }
 
+    // データ記録
+    function recordData(){
+      const feat = getFeatures();
+      examples.push(feat);
+      labels.push(currentPhase);
+      status.textContent = `📊 データ数: ${examples.length}`;
+    }
+
+    // 次のトライアルへ
+    function nextTrial(){
+      trialCount++;
+      if (trialCount >= totalTrialsPerPhase) {
+        currentPhase++;
+        trialCount = 0;
+        if (currentPhase > 2) {
+          status.textContent = "✅ すべてのフェーズが完了しました！";
+          input.disabled = true;
+          return;
+        }
+      }
+      phaseLabel.textContent = classNames[currentPhase];
+      setTimeout(startTrial, 1000);
+    }
+
+    // ゲーム全体開始
+    document.getElementById('startGame').addEventListener('click', ()=>{
+      currentPhase = 0;
+      trialCount = 0;
+      phaseLabel.textContent = classNames[currentPhase];
+      startTrial();
+    });
+
     // モデル構築
     function createModel(){
       const m = tf.sequential();
@@ -140,18 +173,9 @@
       return m;
     }
 
-    // データ追加
-    document.getElementById('collect').addEventListener('click', ()=>{
-      const feat = getFeatures();
-      if (feat[2] === 0) return alert("まずゲームを1回プレイしてください");
-      examples.push(feat);
-      labels.push(parseInt(document.getElementById('label').value));
-      status.textContent = `📊 データ数: ${examples.length}`;
-    });
-
     // 学習
     document.getElementById('train').addEventListener('click', async ()=>{
-      if (examples.length < 5) return alert("データが少なすぎます（最低5件以上）");
+      if (examples.length < 10) return alert("データが足りません。まずゲームを実行してください。");
       const xs = tf.tensor2d(examples);
       const ys = tf.oneHot(tf.tensor1d(labels,'int32'), 3);
       model = createModel();
