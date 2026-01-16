@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>Mouse Logger</title>
+</head>
+<body>
+  <h2>Mouse Logger</h2>
+  <p>Move the mouse around and click.</p>
+
+  <script>
+    const mouseLogs = [];
+    let lastLogTime = 0;
+    const TARGET_HZ = 100; // 50〜120Hz の中間
+    const MIN_INTERVAL = 1000 / TARGET_HZ;
+
+    function logMouseEvent(e, type) {qqqqqqqqqq
+      const now = performance.now();
+      if (now - lastLogTime < MIN_INTERVAL && type === "move") return;
+
+      lastLogTime = now;
+
+      mouseLogs.push({
+        mouse_x: e.clientX,
+        mouse_y: e.clientY,
+        timestamp: now,
+        event_type: type
+      });
+    }
+
+    document.addEventListener("mousemove", (e) => logMouseEvent(e, "move"));
+    document.addEventListener("mousedown", (e) => logMouseEvent(e, "click"));
+    document.addEventListener("mouseup",   (e) => logMouseEvent(e, "release"));
+
+    // 開発用：10秒ごとにログを表示
+    setInterval(() => {
+      console.log("Collected logs:", mouseLogs.slice(-10));
+    }, 10000);
+  </script>
+</body>
+</html>
