@@ -14,7 +14,7 @@
     const TARGET_HZ = 100; // 50〜120Hz の中間
     const MIN_INTERVAL = 1000 / TARGET_HZ;
 
-    function logMouseEvent(e, type) {qqqqqqqqqq
+    function logMouseEvent(e, type) {
       const now = performance.now();
       if (now - lastLogTime < MIN_INTERVAL && type === "move") return;
 
