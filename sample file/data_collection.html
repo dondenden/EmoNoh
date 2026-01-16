@@ -1,22 +1,26 @@
 <!DOCTYPE html>
-<html>
+<html lang="ja">
 <head>
   <meta charset="UTF-8" />
-  <title>Mouse Logger</title>
+  <title>Mouse Logger + Segmentation</title>
 </head>
 <body>
-  <h2>Mouse Logger</h2>
-  <p>Move the mouse around and click.</p>
+  <h2>Mouse Logger + Segmentation</h2>
+  <p>マウスを動かしたりクリックしてください。</p>
 
   <script>
     const mouseLogs = [];
+    const windows = [];
+
     let lastLogTime = 0;
-    const TARGET_HZ = 100; // 50〜120Hz の中間
+    const TARGET_HZ = 100;
     const MIN_INTERVAL = 1000 / TARGET_HZ;
+
+    const WINDOW_LENGTH_MS = 5000; // 5秒ウィンドウ
 
     function logMouseEvent(e, type) {
       const now = performance.now();
-      if (now - lastLogTime < MIN_INTERVAL && type === "move") return;
+      if (type === "move" && now - lastLogTime < MIN_INTERVAL) return;
 
       lastLogTime = now;
 
@@ -32,10 +36,37 @@
     document.addEventListener("mousedown", (e) => logMouseEvent(e, "click"));
     document.addEventListener("mouseup",   (e) => logMouseEvent(e, "release"));
 
-    // 開発用：10秒ごとにログを表示
-    setInterval(() => {
-      console.log("Collected logs:", mouseLogs.slice(-10));
-    }, 10000);
+    // --- セグメンテーション処理 ---
+    let currentWindowStart = performance.now();
+
+    function segmentLogs() {
+      const now = performance.now();
+
+      if (now - currentWindowStart >= WINDOW_LENGTH_MS) {
+        const windowEnd = currentWindowStart + WINDOW_LENGTH_MS;
+
+        const windowData = mouseLogs.filter(
+          log => log.timestamp >= currentWindowStart &&
+                 log.timestamp < windowEnd
+        );
+
+        windows.push({
+          window_id: `w_${Date.now()}`,
+          start_time: currentWindowStart,
+          end_time: windowEnd,
+          window_length: WINDOW_LENGTH_MS,
+          data: windowData
+        });
+
+        console.log("New window created:", windows[windows.length - 1]);
+
+        // 次のウィンドウ開始
+        currentWindowStart = windowEnd;
+      }
+    }
+
+    // 100msごとにセグメンテーションチェック
+    setInterval(segmentLogs, 100);
   </script>
 </body>
 </html>
