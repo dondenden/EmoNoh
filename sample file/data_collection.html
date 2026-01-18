@@ -2,21 +2,31 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8" />
-  <title>Mouse Logger + Segmentation</title>
+  <title>Mouse Logger + Segmentation + Features + Baseline</title>
 </head>
 <body>
-  <h2>Mouse Logger + Segmentation</h2>
+  <h2>Mouse Logger + Segmentation + Features + Baseline</h2>
   <p>マウスを動かしたりクリックしてください。</p>
 
   <script>
     const mouseLogs = [];
     const windows = [];
+    const featuresPerWindow = [];
+    const deltaFeaturesPerWindow = [];
 
     let lastLogTime = 0;
     const TARGET_HZ = 100;
     const MIN_INTERVAL = 1000 / TARGET_HZ;
 
-    const WINDOW_LENGTH_MS = 5000; // 5秒ウィンドウ
+    const WINDOW_LENGTH_MS = 5000;
+    const EMA_ALPHA = 0.05; // ベースライン更新率
+
+    // --- 個人ベースライン ---
+    let personalBaseline = {
+      mean: null,
+      sampleCount: 0,
+      lastUpdated: null
+    };
 
     function logMouseEvent(e, type) {
       const now = performance.now();
@@ -36,7 +46,7 @@
     document.addEventListener("mousedown", (e) => logMouseEvent(e, "click"));
     document.addEventListener("mouseup",   (e) => logMouseEvent(e, "release"));
 
-    // --- セグメンテーション処理 ---
+    // --- セグメンテーション ---
     let currentWindowStart = performance.now();
 
     function segmentLogs() {
@@ -50,23 +60,187 @@
                  log.timestamp < windowEnd
         );
 
-        windows.push({
+        const windowObj = {
           window_id: `w_${Date.now()}`,
           start_time: currentWindowStart,
           end_time: windowEnd,
           window_length: WINDOW_LENGTH_MS,
           data: windowData
-        });
+        };
 
-        console.log("New window created:", windows[windows.length - 1]);
+        windows.push(windowObj);
 
-        // 次のウィンドウ開始
+        // 特徴量抽出
+        const features = extractFeatures(windowData);
+        featuresPerWindow.push(features);
+
+        // ベースライン更新 & 差分計算
+        const deltaFeatures = updateBaselineAndComputeDelta(features);
+        deltaFeaturesPerWindow.push(deltaFeatures);
+
+        console.log("New window:", windowObj);
+        console.log("Features:", features);
+        console.log("Personal baseline:", personalBaseline);
+        console.log("Delta features:", deltaFeatures);
+
         currentWindowStart = windowEnd;
       }
     }
 
-    // 100msごとにセグメンテーションチェック
     setInterval(segmentLogs, 100);
+
+    // --- 特徴量抽出関数 ---
+    function extractFeatures(data) {
+      if (!data || data.length < 2) return null;
+
+      const xs = data.map(p => p.mouse_x);
+      const ys = data.map(p => p.mouse_y);
+      const ts = data.map(p => p.timestamp);
+
+      const distances = [];
+      const velocities = [];
+      const angles = [];
+      const curvatures = [];
+      let pauses = 0;
+
+      for (let i = 1; i < data.length; i++) {
+        const dx = xs[i] - xs[i - 1];
+        const dy = ys[i] - ys[i - 1];
+        const dt = (ts[i] - ts[i - 1]) / 1000;
+
+        const dist = Math.hypot(dx, dy);
+        distances.push(dist);
+
+        const velocity = dt > 0 ? dist / dt : 0;
+        velocities.push(velocity);
+
+        if (velocity < 5) pauses++;
+
+        const angle = Math.atan2(dy, dx);
+        angles.push(angle);
+
+        if (i >= 2) {
+          const prevAngle = angles[i - 2];
+          const dAngle = Math.abs(angle - prevAngle);
+          curvatures.push(dAngle);
+        }
+      }
+
+      const trajectory_length = distances.reduce((a, b) => a + b, 0);
+
+      const mean_x = xs.reduce((a, b) => a + b, 0) / xs.length;
+      const mean_y = ys.reduce((a, b) => a + b, 0) / ys.length;
+
+      const deviations = xs.map((x, i) =>
+        Math.hypot(x - mean_x, ys[i] - mean_y)
+      );
+
+      const mean_deviation = mean(deviations);
+      const max_deviation = Math.max(...deviations);
+
+      const area_under_curve = trajectory_length * mean_deviation;
+
+      let direction_change_count = 0;
+      for (let i = 1; i < angles.length; i++) {
+        if (Math.abs(angles[i] - angles[i - 1]) > Math.PI / 4) {
+          direction_change_count++;
+        }
+      }
+
+      const zigzag_index =
+        distances.length > 0
+          ? direction_change_count / distances.length
+          : 0;
+
+      const curvature_mean = mean(curvatures);
+      const curvature_std = std(curvatures);
+
+      const mean_velocity = mean(velocities);
+      const max_velocity = Math.max(...velocities);
+      const velocity_std = std(velocities);
+
+      const pause_ratio = pauses / velocities.length;
+
+      const sortedVel = [...velocities].sort((a, b) => a - b);
+      const velocity_q1 = quantile(sortedVel, 0.25);
+      const velocity_q2 = quantile(sortedVel, 0.5);
+      const velocity_q3 = quantile(sortedVel, 0.75);
+      const velocity_q4 = quantile(sortedVel, 1.0);
+
+      return {
+        trajectory_length,
+        area_under_curve,
+        max_deviation,
+        mean_deviation,
+        direction_change_count,
+        zigzag_index,
+        curvature_mean,
+        curvature_std,
+        mean_velocity,
+        max_velocity,
+        velocity_std,
+        pause_ratio,
+        velocity_q1,
+        velocity_q2,
+        velocity_q3,
+        velocity_q4
+      };
+    }
+
+    // --- ベースライン更新 & 差分計算 ---
+    function updateBaselineAndComputeDelta(features) {
+      if (!features) return null;
+
+      if (!personalBaseline.mean) {
+        // 初回
+        personalBaseline.mean = { ...features };
+        personalBaseline.sampleCount = 1;
+        personalBaseline.lastUpdated = Date.now();
+      } else {
+        // EMA更新
+        for (const key in features) {
+          const prev = personalBaseline.mean[key];
+          const curr = features[key];
+          personalBaseline.mean[key] =
+            EMA_ALPHA * curr + (1 - EMA_ALPHA) * prev;
+        }
+        personalBaseline.sampleCount += 1;
+        personalBaseline.lastUpdated = Date.now();
+      }
+
+      // 差分計算
+      const delta = {};
+      for (const key in features) {
+        delta[key] = features[key] - personalBaseline.mean[key];
+      }
+
+      return delta;
+    }
+
+    // --- 補助関数 ---
+    function mean(arr) {
+      if (!arr || arr.length === 0) return 0;
+      return arr.reduce((a, b) => a + b, 0) / arr.length;
+    }
+
+    function std(arr) {
+      if (!arr || arr.length === 0) return 0;
+      const m = mean(arr);
+      const variance = mean(arr.map(x => (x - m) ** 2));
+      return Math.sqrt(variance);
+    }
+
+    function quantile(arr, q) {
+      if (!arr || arr.length === 0) return 0;
+      const pos = (arr.length - 1) * q;
+      const base = Math.floor(pos);
+      const rest = pos - base;
+      if (arr[base + 1] !== undefined) {
+        return arr[base] + rest * (arr[base + 1] - arr[base]);
+      } else {
+        return arr[base];
+      }
+    }
   </script>
 </body>
 </html>
