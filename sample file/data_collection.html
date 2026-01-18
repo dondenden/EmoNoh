@@ -2,30 +2,37 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8" />
-  <title>Mouse Logger + Segmentation + Features + Baseline</title>
+  <title>Mouse Logger + Full Pipeline</title>
 </head>
 <body>
-  <h2>Mouse Logger + Segmentation + Features + Baseline</h2>
-  <p>マウスを動かしたりクリックしてください。</p>
+  <h2>Mouse Logger + Full Pipeline</h2>
+  <p>マウスを動かしてください。</p>
 
   <script>
     const mouseLogs = [];
     const windows = [];
     const featuresPerWindow = [];
     const deltaFeaturesPerWindow = [];
+    const modelInputs = [];
 
     let lastLogTime = 0;
     const TARGET_HZ = 100;
     const MIN_INTERVAL = 1000 / TARGET_HZ;
-
     const WINDOW_LENGTH_MS = 5000;
-    const EMA_ALPHA = 0.05; // ベースライン更新率
+    const EMA_ALPHA = 0.05;
 
     // --- 個人ベースライン ---
     let personalBaseline = {
       mean: null,
       sampleCount: 0,
       lastUpdated: null
+    };
+
+    // --- 全体統計 ---
+    let globalStats = {
+      globalMean: null,
+      globalStd: null,
+      sampleCount: 0
     };
 
     function logMouseEvent(e, type) {
@@ -74,14 +81,22 @@
         const features = extractFeatures(windowData);
         featuresPerWindow.push(features);
 
-        // ベースライン更新 & 差分計算
+        // 個人ベースライン更新 & 差分計算
         const deltaFeatures = updateBaselineAndComputeDelta(features);
         deltaFeaturesPerWindow.push(deltaFeatures);
 
+        // 全体統計更新
+        updateGlobalStats(features);
+
+        // モデル入力構築
+        const modelInput = buildModelInput(features, deltaFeatures);
+        modelInputs.push(modelInput);
+
         console.log("New window:", windowObj);
         console.log("Features:", features);
-        console.log("Personal baseline:", personalBaseline);
         console.log("Delta features:", deltaFeatures);
+        console.log("Global stats:", globalStats);
+        console.log("Model input:", modelInput);
 
         currentWindowStart = windowEnd;
       }
@@ -187,17 +202,15 @@
       };
     }
 
-    // --- ベースライン更新 & 差分計算 ---
+    // --- 個人ベースライン更新 & 差分 ---
     function updateBaselineAndComputeDelta(features) {
       if (!features) return null;
 
       if (!personalBaseline.mean) {
-        // 初回
         personalBaseline.mean = { ...features };
         personalBaseline.sampleCount = 1;
         personalBaseline.lastUpdated = Date.now();
       } else {
-        // EMA更新
         for (const key in features) {
           const prev = personalBaseline.mean[key];
           const curr = features[key];
@@ -208,13 +221,60 @@
         personalBaseline.lastUpdated = Date.now();
       }
 
-      // 差分計算
       const delta = {};
       for (const key in features) {
         delta[key] = features[key] - personalBaseline.mean[key];
       }
 
       return delta;
+    }
+
+    // --- 全体統計更新 ---
+    function updateGlobalStats(features) {
+      if (!features) return;
+
+      if (!globalStats.globalMean) {
+        globalStats.globalMean = { ...features };
+        globalStats.globalStd = {};
+        for (const key in features) {
+          globalStats.globalStd[key] = 0;
+        }
+        globalStats.sampleCount = 1;
+      } else {
+        globalStats.sampleCount += 1;
+        for (const key in features) {
+          const prevMean = globalStats.globalMean[key];
+          const curr = features[key];
+          const newMean =
+            prevMean + (curr - prevMean) / globalStats.sampleCount;
+
+          const prevVar = globalStats.globalStd[key] ** 2;
+          const newVar =
+            prevVar +
+            (curr - prevMean) * (curr - newMean);
+
+          globalStats.globalMean[key] = newMean;
+          globalStats.globalStd[key] = Math.sqrt(newVar);
+        }
+      }
+    }
+
+    // --- モデル入力構築 ---
+    function buildModelInput(features, deltaFeatures) {
+      if (!features || !deltaFeatures || !globalStats.globalMean) return null;
+
+      const zGlobals = [];
+      const deltas = [];
+
+      for (const key in features) {
+        const mean = globalStats.globalMean[key];
+        const std = globalStats.globalStd[key] || 1;
+        const z = (features[key] - mean) / std;
+        zGlobals.push(z);
+        deltas.push(deltaFeatures[key]);
+      }
+
+      return [...zGlobals, ...deltas];
     }
 
     // --- 補助関数 ---
