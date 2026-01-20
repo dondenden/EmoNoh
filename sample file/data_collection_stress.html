@@ -16,6 +16,7 @@
       width: 40px; height: 40px; border-radius: 50%;
       background: red; position: absolute; cursor: pointer;
     }
+    .fake-target { background: #888; }
     #status { font-weight: bold; margin-bottom: 10px; color: #a00; }
     #score { font-weight: bold; margin-bottom: 5px; }
     #timeRemaining { font-weight: bold; margin-bottom: 10px; }
@@ -76,7 +77,7 @@ const TARGET_RADIUS = 20;
 const WINDOW_LENGTH_MS = 5000;
 const SAMPLING_INTERVAL = 10;
 const FAKE_TARGET_PROBABILITY = 0.4;
-const MISS_PENALTY = 1;
+const MISS_PENALTY = 2; // フェイクターゲットの減点量
 const DUMMY_MOVE_INTERVAL = 700; // ダミーの移動頻度(ms)
 
 // =======================
@@ -225,9 +226,9 @@ function buildModelInput(features, delta) {
 }
 
 function dummyModelPredict(input) {
-  const positive = Math.min(1, Math.max(0, 0.3 + input[0] * 0.1));
-  const attentive = Math.min(1, Math.max(0, 0.8 + input[1] * 0.1));
-  const confusion = Math.min(1, Math.max(0, 0.6 + input[2] * 0.1));
+  const positive = Math.min(1, Math.max(0, 0.2 + input[0] * 0.1));
+  const attentive = Math.min(1, Math.max(0, 0.85 + input[1] * 0.1));
+  const confusion = Math.min(1, Math.max(0, 0.7 + input[2] * 0.1));
   return [positive, attentive, confusion];
 }
 
@@ -275,7 +276,7 @@ setInterval(() => {
 }, 500);
 
 // =======================
-// ゲームロジック（Stress）
+// ゲームロジック（Stress・減点式）
 // =======================
 const gameArea = document.getElementById('gameArea');
 const statusText = document.getElementById('status');
@@ -304,7 +305,7 @@ function createTarget() {
   moveElementRandomly(target);
   target.addEventListener('click', () => {
     if (!gameActive) return;
-    score++;
+    score++; // 正解は加点
     scoreText.textContent = `スコア: ${score}`;
     createTarget();
     maybeCreateFakeTarget();
@@ -319,7 +320,7 @@ function createFakeTarget() {
   moveElementRandomly(fakeTarget);
   fakeTarget.addEventListener('click', () => {
     if (!gameActive) return;
-    score = Math.max(0, score - MISS_PENALTY);
+    score = Math.max(0, score - MISS_PENALTY); // ❗ 減点式
     scoreText.textContent = `スコア: ${score}`;
     fakeTarget.remove();
     fakeTarget = null;
