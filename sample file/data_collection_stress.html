@@ -10,16 +10,15 @@
       width: 800px; height: 500px; border: 2px solid #333;
       position: relative; margin-bottom: 20px;
       background: #fff3f3;
+      overflow: hidden;
     }
     .target, .fake-target {
       width: 40px; height: 40px; border-radius: 50%;
       background: red; position: absolute; cursor: pointer;
     }
-    .fake-target {
-      opacity: 0.9; /* ほぼ同じだが微妙な差 */
-    }
     #status { font-weight: bold; margin-bottom: 10px; color: #a00; }
-    #score { font-weight: bold; margin-bottom: 10px; }
+    #score { font-weight: bold; margin-bottom: 5px; }
+    #timeRemaining { font-weight: bold; margin-bottom: 10px; }
     #timerBar {
       width: 800px;
       height: 15px;
@@ -44,6 +43,7 @@
 
 <p id="status">スタートボタンを押してストレスセッションを開始してください。</p>
 <p id="score">スコア: 0</p>
+<p id="timeRemaining">残り時間: 30.0 秒</p>
 <div id="timerBar"><div id="timerFill"></div></div>
 <button id="startBtn">ゲーム開始</button>
 
@@ -75,8 +75,9 @@ const GAME_DURATION_MS = 30000;
 const TARGET_RADIUS = 20;
 const WINDOW_LENGTH_MS = 5000;
 const SAMPLING_INTERVAL = 10;
-const FAKE_TARGET_PROBABILITY = 0.4; // 出現率アップ
-let MISS_PENALTY = 1;
+const FAKE_TARGET_PROBABILITY = 0.4;
+const MISS_PENALTY = 1;
+const DUMMY_MOVE_INTERVAL = 700; // ダミーの移動頻度(ms)
 
 // =======================
 // 状態変数
@@ -97,15 +98,15 @@ let globalStats = { globalMean: null, globalStd: null, sampleCount: 0 };
 function logMouseEvent(e, type) {
   const now = performance.now();
   if (type === 'move' && now - lastSampleTime < SAMPLING_INTERVAL) return;
-  mouseLogs.push({ mouse_x: e.clientX, mouse_y: e.clientY, timestamp: now, event_type: type });
   lastSampleTime = now;
+  mouseLogs.push({ mouse_x: e.clientX, mouse_y: e.clientY, timestamp: now, event_type: type });
 }
 document.addEventListener('mousemove', e => logMouseEvent(e, 'move'));
 document.addEventListener('mousedown', e => logMouseEvent(e, 'click'));
 document.addEventListener('mouseup',   e => logMouseEvent(e, 'release'));
 
 // =======================
-// 特徴量抽出
+// 特徴量抽出（同一）
 // =======================
 function extractFeatures(logs) {
   if (!logs || logs.length < 2) return null;
@@ -172,7 +173,7 @@ function extractFeatures(logs) {
 }
 
 // =======================
-// ベースライン・正規化・推論
+// ベースライン・正規化・推論（同一）
 // =======================
 function updateBaselineAndComputeDelta(features) {
   if (!features) return null;
@@ -224,9 +225,9 @@ function buildModelInput(features, delta) {
 }
 
 function dummyModelPredict(input) {
-  const positive = Math.min(1, Math.max(0, 0.2 + input[0] * 0.1));
-  const attentive = Math.min(1, Math.max(0, 0.85 + input[1] * 0.1));
-  const confusion = Math.min(1, Math.max(0, 0.7 + input[2] * 0.1));
+  const positive = Math.min(1, Math.max(0, 0.3 + input[0] * 0.1));
+  const attentive = Math.min(1, Math.max(0, 0.8 + input[1] * 0.1));
+  const confusion = Math.min(1, Math.max(0, 0.6 + input[2] * 0.1));
   return [positive, attentive, confusion];
 }
 
@@ -274,20 +275,21 @@ setInterval(() => {
 }, 500);
 
 // =======================
-// ゲームロジック（Stress 強化）
+// ゲームロジック（Stress）
 // =======================
 const gameArea = document.getElementById('gameArea');
 const statusText = document.getElementById('status');
 const scoreText = document.getElementById('score');
 const timerFill = document.getElementById('timerFill');
+const timeRemainingText = document.getElementById('timeRemaining');
 let gameTimer = null;
 let countdownTimer = null;
+let dummyMoveTimer = null;
 let target = null;
 let fakeTarget = null;
 let score = 0;
 let startTime = null;
-
-const TARGET_LIFETIME_MS = 1200; // 寿命制限
+let gameActive = false;
 
 function randomPosition() {
   const x = Math.random() * (gameArea.clientWidth - 2 * TARGET_RADIUS);
@@ -299,42 +301,24 @@ function createTarget() {
   if (target) target.remove();
   target = document.createElement('div');
   target.className = 'target';
-  const { x, y } = randomPosition();
-  target.style.left = x + 'px';
-  target.style.top = y + 'px';
-
-  let clicked = false;
-
+  moveElementRandomly(target);
   target.addEventListener('click', () => {
-    clicked = true;
+    if (!gameActive) return;
     score++;
     scoreText.textContent = `スコア: ${score}`;
-    target.remove();
     createTarget();
     maybeCreateFakeTarget();
   });
-
   gameArea.appendChild(target);
-
-  setTimeout(() => {
-    if (!clicked && target) {
-      target.remove();
-      score = Math.max(0, score - MISS_PENALTY);
-      scoreText.textContent = `スコア: ${score}`;
-      createTarget();
-      maybeCreateFakeTarget();
-    }
-  }, TARGET_LIFETIME_MS);
 }
 
 function createFakeTarget() {
   if (fakeTarget) fakeTarget.remove();
   fakeTarget = document.createElement('div');
   fakeTarget.className = 'fake-target';
-  const { x, y } = randomPosition();
-  fakeTarget.style.left = x + 'px';
-  fakeTarget.style.top = y + 'px';
+  moveElementRandomly(fakeTarget);
   fakeTarget.addEventListener('click', () => {
+    if (!gameActive) return;
     score = Math.max(0, score - MISS_PENALTY);
     scoreText.textContent = `スコア: ${score}`;
     fakeTarget.remove();
@@ -349,15 +333,12 @@ function maybeCreateFakeTarget() {
   }
 }
 
-// 途中でルール変更（予測不能性）
-setTimeout(() => {
-  MISS_PENALTY = 2;
-  statusText.textContent = '⚠ ルール変更：フェイクをクリックすると2点減点されます！';
-}, GAME_DURATION_MS / 2);
+function moveElementRandomly(el) {
+  const { x, y } = randomPosition();
+  el.style.left = x + 'px';
+  el.style.top = y + 'px';
+}
 
-// =======================
-// ゲーム制御
-// =======================
 function startGame() {
   score = 0;
   scoreText.textContent = "スコア: 0";
@@ -366,8 +347,10 @@ function startGame() {
   currentSessionId = `session_${Date.now()}`;
   lastWindowEnd = performance.now();
   startTime = performance.now();
-  statusText.textContent = '【ストレスセッション】時間内にできるだけ多くクリックしてください。フェイクが混ざっています。';
+  gameActive = true;
+  statusText.textContent = '【ストレスセッション】時間内にできるだけ多くクリックしてください。ミスすると減点されます。';
   document.getElementById('survey').style.display = 'none';
+
   createTarget();
   maybeCreateFakeTarget();
 
@@ -378,12 +361,21 @@ function startGame() {
     const remaining = Math.max(0, GAME_DURATION_MS - elapsed);
     const ratio = remaining / GAME_DURATION_MS;
     timerFill.style.width = `${ratio * 100}%`;
+    timeRemainingText.textContent = `残り時間: ${(remaining / 1000).toFixed(1)} 秒`;
   }, 100);
+
+  dummyMoveTimer = setInterval(() => {
+    if (!gameActive) return;
+    if (target) moveElementRandomly(target);
+    if (fakeTarget) moveElementRandomly(fakeTarget);
+  }, DUMMY_MOVE_INTERVAL);
 }
 
 function endGame() {
+  gameActive = false;
   clearTimeout(gameTimer);
   clearInterval(countdownTimer);
+  clearInterval(dummyMoveTimer);
   if (target) target.remove();
   if (fakeTarget) fakeTarget.remove();
   statusText.textContent = `セッション終了！スコア: ${score}`;
