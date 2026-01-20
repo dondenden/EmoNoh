@@ -16,7 +16,6 @@
       width: 40px; height: 40px; border-radius: 50%;
       background: red; position: absolute; cursor: pointer;
     }
-    .fake-target { background: #888; }
     #status { font-weight: bold; margin-bottom: 10px; color: #a00; }
     #score { font-weight: bold; margin-bottom: 5px; }
     #timeRemaining { font-weight: bold; margin-bottom: 10px; }
@@ -43,7 +42,7 @@
 <h2>Mouse Emotion Data Collection Game - Stress Mode</h2>
 
 <p id="status">スタートボタンを押してストレスセッションを開始してください。</p>
-<p id="score">スコア: 0</p>
+<p id="score">スコア: 20</p>
 <p id="timeRemaining">残り時間: 30.0 秒</p>
 <div id="timerBar"><div id="timerFill"></div></div>
 <button id="startBtn">ゲーム開始</button>
@@ -77,7 +76,7 @@ const TARGET_RADIUS = 20;
 const WINDOW_LENGTH_MS = 5000;
 const SAMPLING_INTERVAL = 10;
 const FAKE_TARGET_PROBABILITY = 0.4;
-const MISS_PENALTY = 2; // フェイクターゲットの減点量
+const CORRECT_PENALTY = 1; // 正解ターゲットの減点量
 const DUMMY_MOVE_INTERVAL = 900; // ダミーの移動頻度(ms)
 
 // =======================
@@ -107,7 +106,7 @@ document.addEventListener('mousedown', e => logMouseEvent(e, 'click'));
 document.addEventListener('mouseup',   e => logMouseEvent(e, 'release'));
 
 // =======================
-// 特徴量抽出（同一）
+// 特徴量抽出
 // =======================
 function extractFeatures(logs) {
   if (!logs || logs.length < 2) return null;
@@ -174,7 +173,7 @@ function extractFeatures(logs) {
 }
 
 // =======================
-// ベースライン・正規化・推論（同一）
+// ベースライン・正規化・推論
 // =======================
 function updateBaselineAndComputeDelta(features) {
   if (!features) return null;
@@ -276,7 +275,7 @@ setInterval(() => {
 }, 500);
 
 // =======================
-// ゲームロジック（Stress・減点式）
+// ゲームロジック（正解で減点・ダミーは変化なし）
 // =======================
 const gameArea = document.getElementById('gameArea');
 const statusText = document.getElementById('status');
@@ -288,7 +287,7 @@ let countdownTimer = null;
 let dummyMoveTimer = null;
 let target = null;
 let fakeTarget = null;
-let score = 0;
+let score = 20;
 let startTime = null;
 let gameActive = false;
 
@@ -305,7 +304,7 @@ function createTarget() {
   moveElementRandomly(target);
   target.addEventListener('click', () => {
     if (!gameActive) return;
-    score++; // 正解は加点
+    score = Math.max(0, score - CORRECT_PENALTY); // ❗ 正解で減点
     scoreText.textContent = `スコア: ${score}`;
     createTarget();
     maybeCreateFakeTarget();
@@ -320,8 +319,7 @@ function createFakeTarget() {
   moveElementRandomly(fakeTarget);
   fakeTarget.addEventListener('click', () => {
     if (!gameActive) return;
-    score = Math.max(0, score - MISS_PENALTY); // ❗ 減点式
-    scoreText.textContent = `スコア: ${score}`;
+    // ❗ ダミーはスコア変化なし
     fakeTarget.remove();
     fakeTarget = null;
   });
@@ -341,15 +339,15 @@ function moveElementRandomly(el) {
 }
 
 function startGame() {
-  score = 0;
-  scoreText.textContent = "スコア: 0";
+  score = 20;
+  scoreText.textContent = "スコア: 20";
   mouseLogs = [];
   windowFeatureBuffer = [];
   currentSessionId = `session_${Date.now()}`;
   lastWindowEnd = performance.now();
   startTime = performance.now();
   gameActive = true;
-  statusText.textContent = '【ストレスセッション】時間内にできるだけ多くクリックしてください。ミスすると減点されます。';
+  statusText.textContent = '【ストレスセッション】正解をクリックすると減点されます。ダミーはスコア変化なしです。';
   document.getElementById('survey').style.display = 'none';
 
   createTarget();
