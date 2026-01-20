@@ -10,17 +10,23 @@
       width: 800px; height: 500px; border: 2px solid #333;
       position: relative; margin-bottom: 20px;
       background: #f9f9f9;
+      overflow: hidden;
     }
-    .target {
+    .target, .dummy {
       width: 40px; height: 40px; border-radius: 50%;
       background: red; position: absolute; cursor: pointer;
       transition: transform 0.05s ease;
     }
-    .target:active {
+    .target:active, .dummy:active {
       transform: scale(0.9);
     }
-    #status { font-weight: bold; margin-bottom: 10px; }
-    #score { font-weight: bold; margin-bottom: 10px; }
+    #status, #score, #timer { font-weight: bold; margin-bottom: 10px; }
+    #timeBarContainer {
+      width: 800px; height: 20px; background: #ddd; margin-bottom: 10px;
+    }
+    #timeBar {
+      height: 100%; width: 100%; background: #4caf50;
+    }
     #log { white-space: pre-wrap; font-size: 12px; max-height: 200px; overflow-y: auto; border: 1px solid #ccc; padding: 10px; }
     #survey { display: none; margin-top: 20px; border-top: 1px solid #ccc; padding-top: 10px; }
     #exportBtn { margin-top: 10px; }
@@ -31,7 +37,13 @@
 <h2>Mouse Emotion Data Collection Game - Focus Mode</h2>
 
 <p id="status">スタートボタンを押してゲームを開始してください。</p>
-<p id="score">スコア: 0</p>
+<p id="score">残りスコア: 100</p>
+<p id="timer">残り時間: 30.0 秒</p>
+
+<div id="timeBarContainer">
+  <div id="timeBar"></div>
+</div>
+
 <button id="startBtn">ゲーム開始</button>
 
 <div id="gameArea"></div>
@@ -62,6 +74,9 @@ const GAME_DURATION_MS = 30000;
 const TARGET_RADIUS = 20;
 const WINDOW_LENGTH_MS = 5000;
 const SAMPLING_INTERVAL = 10;
+const INITIAL_SCORE = 100;
+const MISS_PENALTY = 5;
+const DUMMY_COUNT = 3;
 
 // =======================
 // 状態変数
@@ -218,7 +233,7 @@ function buildModelInput(features, delta) {
 }
 
 // =======================
-// ダミーモデル（後で差し替え）
+// ダミーモデル
 // =======================
 function dummyModelPredict(input) {
   const positive = Math.min(1, Math.max(0, 0.6 + input[0] * 0.1));
@@ -276,43 +291,108 @@ setInterval(() => {
 const gameArea = document.getElementById('gameArea');
 const statusText = document.getElementById('status');
 const scoreText = document.getElementById('score');
+const timerText = document.getElementById('timer');
+const timeBar = document.getElementById('timeBar');
+
 let gameTimer = null;
+let countdownTimer = null;
 let target = null;
-let score = 0;
+let dummies = [];
+let score = INITIAL_SCORE;
+let gameStartTime = null;
+
+function randomPosition() {
+  return {
+    x: Math.random() * (gameArea.clientWidth - 2 * TARGET_RADIUS),
+    y: Math.random() * (gameArea.clientHeight - 2 * TARGET_RADIUS)
+  };
+}
+
+function moveElement(el) {
+  const { x, y } = randomPosition();
+  el.style.left = x + 'px';
+  el.style.top = y + 'px';
+}
 
 function createTarget() {
   if (target) target.remove();
   target = document.createElement('div');
   target.className = 'target';
-  const x = Math.random() * (gameArea.clientWidth - 2 * TARGET_RADIUS);
-  const y = Math.random() * (gameArea.clientHeight - 2 * TARGET_RADIUS);
-  target.style.left = x + 'px';
-  target.style.top = y + 'px';
-  target.addEventListener('click', () => {
-    score++;
-    scoreText.textContent = `スコア: ${score}`;
-    createTarget();
+  moveElement(target);
+  target.addEventListener('click', (e) => {
+    e.stopPropagation();
+    createTarget(); // 正解 → 減点なし、次へ
   });
   gameArea.appendChild(target);
 }
 
+function createDummies() {
+  dummies.forEach(d => d.remove());
+  dummies = [];
+  for (let i = 0; i < DUMMY_COUNT; i++) {
+    const dummy = document.createElement('div');
+    dummy.className = 'dummy';
+    moveElement(dummy);
+    dummy.addEventListener('click', (e) => {
+      e.stopPropagation();
+      score -= MISS_PENALTY;
+      if (score < 0) score = 0;
+      scoreText.textContent = `残りスコア: ${score}`;
+    });
+    gameArea.appendChild(dummy);
+    dummies.push(dummy);
+  }
+}
+
+function startMovingDummies() {
+  dummies.forEach(dummy => {
+    dummy.moveInterval = setInterval(() => {
+      moveElement(dummy);
+    }, 800);
+  });
+}
+
+function stopMovingDummies() {
+  dummies.forEach(dummy => clearInterval(dummy.moveInterval));
+}
+
 function startGame() {
-  score = 0;
-  scoreText.textContent = "スコア: 0";
+  score = INITIAL_SCORE;
+  scoreText.textContent = `残りスコア: ${score}`;
   mouseLogs = [];
   windowFeatureBuffer = [];
   currentSessionId = `session_${Date.now()}`;
   lastWindowEnd = performance.now();
-  statusText.textContent = '【集中セッション】ターゲットをできるだけ素早く正確にクリックしてください。';
+  statusText.textContent = '【集中セッション】正しいターゲットを見極めてクリックし続けてください。';
   document.getElementById('survey').style.display = 'none';
+
+  gameStartTime = performance.now();
+  updateTimerUI();
+
   createTarget();
+  createDummies();
+  startMovingDummies();
+
   gameTimer = setTimeout(endGame, GAME_DURATION_MS);
+  countdownTimer = setInterval(updateTimerUI, 100);
+}
+
+function updateTimerUI() {
+  const elapsed = performance.now() - gameStartTime;
+  const remaining = Math.max(0, GAME_DURATION_MS - elapsed);
+  const seconds = (remaining / 1000).toFixed(1);
+  timerText.textContent = `残り時間: ${seconds} 秒`;
+  const ratio = remaining / GAME_DURATION_MS;
+  timeBar.style.width = `${ratio * 100}%`;
 }
 
 function endGame() {
   clearTimeout(gameTimer);
+  clearInterval(countdownTimer);
+  stopMovingDummies();
   if (target) target.remove();
-  statusText.textContent = `セッション終了！スコア: ${score}`;
+  dummies.forEach(d => d.remove());
+  statusText.textContent = `セッション終了！残りスコア: ${score}`;
   document.getElementById('survey').style.display = 'block';
 }
 
@@ -329,7 +409,7 @@ document.getElementById('submitSurveyBtn').addEventListener('click', () => {
   }
 
   const record = {
-    subject_id: 'S01', // 将来入力UIに拡張可能
+    subject_id: 'S01',
     session_id: currentSessionId,
     session_type: SESSION_TYPE,
     label_valence: valence,
