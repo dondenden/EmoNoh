@@ -75,6 +75,7 @@ const TARGET_RADIUS = 20;
 const WINDOW_LENGTH_MS = 5000;
 const SAMPLING_INTERVAL = 10;
 const INITIAL_SCORE = 100;
+const CLICK_PENALTY = 1;   // ← クリックごとに減る量
 
 // =======================
 // 状態変数
@@ -297,6 +298,7 @@ let countdownTimer = null;
 let target = null;
 let score = INITIAL_SCORE;
 let gameStartTime = null;
+let gameActive = false;
 
 function randomPosition() {
   return {
@@ -305,21 +307,22 @@ function randomPosition() {
   };
 }
 
-function moveElement(el) {
-  const { x, y } = randomPosition();
-  el.style.left = x + 'px';
-  el.style.top = y + 'px';
-}
-
 function createTarget() {
   if (target) target.remove();
   target = document.createElement('div');
   target.className = 'target';
-  moveElement(target);
+  const { x, y } = randomPosition();
+  target.style.left = x + 'px';
+  target.style.top = y + 'px';
+
   target.addEventListener('click', (e) => {
+    if (!gameActive) return;
     e.stopPropagation();
-    createTarget(); // 正解 → 減点なし、次へ
+    score -= CLICK_PENALTY;   // ← ここで減点
+    if (score < 0) score = 0;
+    scoreText.textContent = `残りスコア: ${score}`;
   });
+
   gameArea.appendChild(target);
 }
 
@@ -330,10 +333,11 @@ function startGame() {
   windowFeatureBuffer = [];
   currentSessionId = `session_${Date.now()}`;
   lastWindowEnd = performance.now();
-  statusText.textContent = '【集中セッション】正しいターゲットを正確にクリックし続けてください。';
+  statusText.textContent = '【集中セッション】同じターゲットをクリックし続けてください。';
   document.getElementById('survey').style.display = 'none';
 
   gameStartTime = performance.now();
+  gameActive = true;
   updateTimerUI();
 
   createTarget();
@@ -343,6 +347,7 @@ function startGame() {
 }
 
 function updateTimerUI() {
+  if (!gameActive) return;
   const elapsed = performance.now() - gameStartTime;
   const remaining = Math.max(0, GAME_DURATION_MS - elapsed);
   const seconds = (remaining / 1000).toFixed(1);
@@ -354,6 +359,7 @@ function updateTimerUI() {
 function endGame() {
   clearTimeout(gameTimer);
   clearInterval(countdownTimer);
+  gameActive = false;
   if (target) target.remove();
   statusText.textContent = `セッション終了！残りスコア: ${score}`;
   document.getElementById('survey').style.display = 'block';
