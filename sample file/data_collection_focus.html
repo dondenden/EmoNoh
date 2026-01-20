@@ -12,12 +12,12 @@
       background: #f9f9f9;
       overflow: hidden;
     }
-    .target, .dummy {
+    .target {
       width: 40px; height: 40px; border-radius: 50%;
       background: red; position: absolute; cursor: pointer;
       transition: transform 0.05s ease;
     }
-    .target:active, .dummy:active {
+    .target:active {
       transform: scale(0.9);
     }
     #status, #score, #timer { font-weight: bold; margin-bottom: 10px; }
@@ -75,8 +75,6 @@ const TARGET_RADIUS = 20;
 const WINDOW_LENGTH_MS = 5000;
 const SAMPLING_INTERVAL = 10;
 const INITIAL_SCORE = 100;
-const MISS_PENALTY = 5;
-const DUMMY_COUNT = 3;
 
 // =======================
 // 状態変数
@@ -297,7 +295,6 @@ const timeBar = document.getElementById('timeBar');
 let gameTimer = null;
 let countdownTimer = null;
 let target = null;
-let dummies = [];
 let score = INITIAL_SCORE;
 let gameStartTime = null;
 
@@ -326,36 +323,6 @@ function createTarget() {
   gameArea.appendChild(target);
 }
 
-function createDummies() {
-  dummies.forEach(d => d.remove());
-  dummies = [];
-  for (let i = 0; i < DUMMY_COUNT; i++) {
-    const dummy = document.createElement('div');
-    dummy.className = 'dummy';
-    moveElement(dummy);
-    dummy.addEventListener('click', (e) => {
-      e.stopPropagation();
-      score -= MISS_PENALTY;
-      if (score < 0) score = 0;
-      scoreText.textContent = `残りスコア: ${score}`;
-    });
-    gameArea.appendChild(dummy);
-    dummies.push(dummy);
-  }
-}
-
-function startMovingDummies() {
-  dummies.forEach(dummy => {
-    dummy.moveInterval = setInterval(() => {
-      moveElement(dummy);
-    }, 800);
-  });
-}
-
-function stopMovingDummies() {
-  dummies.forEach(dummy => clearInterval(dummy.moveInterval));
-}
-
 function startGame() {
   score = INITIAL_SCORE;
   scoreText.textContent = `残りスコア: ${score}`;
@@ -363,15 +330,13 @@ function startGame() {
   windowFeatureBuffer = [];
   currentSessionId = `session_${Date.now()}`;
   lastWindowEnd = performance.now();
-  statusText.textContent = '【集中セッション】正しいターゲットを見極めてクリックし続けてください。';
+  statusText.textContent = '【集中セッション】正しいターゲットを正確にクリックし続けてください。';
   document.getElementById('survey').style.display = 'none';
 
   gameStartTime = performance.now();
   updateTimerUI();
 
   createTarget();
-  createDummies();
-  startMovingDummies();
 
   gameTimer = setTimeout(endGame, GAME_DURATION_MS);
   countdownTimer = setInterval(updateTimerUI, 100);
@@ -389,9 +354,7 @@ function updateTimerUI() {
 function endGame() {
   clearTimeout(gameTimer);
   clearInterval(countdownTimer);
-  stopMovingDummies();
   if (target) target.remove();
-  dummies.forEach(d => d.remove());
   statusText.textContent = `セッション終了！残りスコア: ${score}`;
   document.getElementById('survey').style.display = 'block';
 }
