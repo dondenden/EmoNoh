@@ -37,7 +37,7 @@
 <h2>Mouse Emotion Data Collection Game - Focus Mode</h2>
 
 <p id="status">スタートボタンを押してゲームを開始してください。</p>
-<p id="score">残りスコア: 100</p>
+<p id="score">残りスコア: 20</p>
 <p id="timer">残り時間: 30.0 秒</p>
 
 <div id="timeBarContainer">
@@ -74,8 +74,8 @@ const GAME_DURATION_MS = 30000;
 const TARGET_RADIUS = 20;
 const WINDOW_LENGTH_MS = 5000;
 const SAMPLING_INTERVAL = 10;
-const INITIAL_SCORE = 100;
-const CLICK_PENALTY = 1;   // ← クリックごとに減る量
+const INITIAL_SCORE = 20;
+const CLICK_PENALTY = 1;
 
 // =======================
 // 状態変数
@@ -318,9 +318,14 @@ function createTarget() {
   target.addEventListener('click', (e) => {
     if (!gameActive) return;
     e.stopPropagation();
-    score -= CLICK_PENALTY;   // ← ここで減点
+    score -= CLICK_PENALTY;
     if (score < 0) score = 0;
     scoreText.textContent = `残りスコア: ${score}`;
+
+    // クリック後に別位置へ再配置
+    const pos = randomPosition();
+    target.style.left = pos.x + 'px';
+    target.style.top = pos.y + 'px';
   });
 
   gameArea.appendChild(target);
@@ -333,7 +338,7 @@ function startGame() {
   windowFeatureBuffer = [];
   currentSessionId = `session_${Date.now()}`;
   lastWindowEnd = performance.now();
-  statusText.textContent = '【集中セッション】同じターゲットをクリックし続けてください。';
+  statusText.textContent = '【集中セッション】ターゲットをクリックしてスコアを0に近づけてください。';
   document.getElementById('survey').style.display = 'none';
 
   gameStartTime = performance.now();
